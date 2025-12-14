@@ -11,9 +11,9 @@ class Row:
     clip_id: str
     audio_path: str
     label: str
-    group: str
+    uploader_id: str
     votes: int | None
-    sound_length: float | None
+    sound_length_sec: float | None
 
 
 def _to_int(v: str) -> int | None:
@@ -41,7 +41,7 @@ def read_metadata_rows(
     audio_dir: str | Path,
     id_col: str,
     label_col: str,
-    group_col: str,
+    uploader_col: str,
 ) -> tuple[list[Row], dict[str, Any]]:
     metadata_csv = Path(metadata_csv)
     audio_dir = Path(audio_dir)
@@ -52,7 +52,7 @@ def read_metadata_rows(
         "n_metadata_rows": 0,
         "n_missing_id": 0,
         "n_missing_label": 0,
-        "n_missing_group": 0,
+        "n_missing_uploader_id": 0,
         "n_missing_audio_file": 0,
     }
 
@@ -68,9 +68,9 @@ def read_metadata_rows(
             if not label:
                 stats["n_missing_label"] += 1
                 continue
-            group = (r.get(group_col) or "").strip()
-            if not group:
-                stats["n_missing_group"] += 1
+            uploader_id = (r.get(uploader_col) or "").strip()
+            if not uploader_id:
+                stats["n_missing_uploader_id"] += 1
                 continue
 
             audio_path = audio_dir / f"{clip_id}.ogg"
@@ -79,59 +79,37 @@ def read_metadata_rows(
                 continue
 
             votes = _to_int(r.get("votes", ""))
-            sound_length = _to_float(r.get("sound_length", ""))
+            sound_length_sec = _to_float(r.get("sound_length", ""))
             rows.append(
                 Row(
                     clip_id=clip_id,
                     audio_path=str(audio_path),
                     label=label,
-                    group=group,
+                    uploader_id=uploader_id,
                     votes=votes,
-                    sound_length=sound_length,
+                    sound_length_sec=sound_length_sec,
                 )
             )
 
     return rows, stats
 
 
-def filter_rows(
-    rows: Iterable[Row],
-    min_sound_length_sec: float | None,
-    max_sound_length_sec: float | None,
-    min_votes: int | None,
-) -> tuple[list[Row], dict[str, Any]]:
+def filter_rows_by_votes(rows: Iterable[Row], min_votes: int | None) -> tuple[list[Row], dict[str, Any]]:
     out: list[Row] = []
     stats: dict[str, Any] = {
-        "min_sound_length_sec": min_sound_length_sec,
-        "max_sound_length_sec": max_sound_length_sec,
         "min_votes": min_votes,
         "n_in": 0,
         "n_out": 0,
-        "n_drop_length": 0,
         "n_drop_votes": 0,
-        "n_drop_missing_length": 0,
     }
 
     for row in rows:
         stats["n_in"] += 1
-        if row.sound_length is None:
-            if min_sound_length_sec is not None:
-                stats["n_drop_missing_length"] += 1
-                continue
-        else:
-            if min_sound_length_sec is not None and row.sound_length < min_sound_length_sec:
-                stats["n_drop_length"] += 1
-                continue
-            if max_sound_length_sec is not None and row.sound_length > max_sound_length_sec:
-                stats["n_drop_length"] += 1
-                continue
-
         if min_votes is not None:
             v = row.votes if row.votes is not None else 0
-            if v < min_votes:
+            if v < int(min_votes):
                 stats["n_drop_votes"] += 1
                 continue
-
         out.append(row)
         stats["n_out"] += 1
 
@@ -150,6 +128,7 @@ def subset_rows(
     seed: int,
     top_k_labels: int | None,
     max_per_label: int | None,
+    max_total: int | None = None,
 ) -> tuple[list[Row], dict[str, Any]]:
     import random
 
@@ -176,9 +155,14 @@ def subset_rows(
             items = items[: int(max_per_label)]
         out.extend(items)
 
+    if max_total is not None and len(out) > int(max_total):
+        rng.shuffle(out)
+        out = out[: int(max_total)]
+
     stats: dict[str, Any] = {
         "top_k_labels": top_k_labels,
         "max_per_label": max_per_label,
+        "max_total": max_total,
         "n_in": len(rows),
         "n_after_label_filter": len(kept),
         "n_out": len(out),
@@ -192,7 +176,7 @@ def label_group_counts(rows: list[Row]) -> tuple[dict[str, int], dict[str, int]]
     groups: dict[str, set[str]] = {}
     for r in rows:
         counts[r.label] = counts.get(r.label, 0) + 1
-        groups.setdefault(r.label, set()).add(r.group)
+        groups.setdefault(r.label, set()).add(r.uploader_id)
     group_counts = {k: len(v) for k, v in groups.items()}
     for k in counts:
         group_counts.setdefault(k, 0)

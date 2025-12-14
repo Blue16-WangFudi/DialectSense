@@ -44,7 +44,7 @@ def make_group_splits(
 
     clip_ids = np.array([r.clip_id for r in rows])
     labels = np.array([r.label for r in rows])
-    groups = np.array([r.group for r in rows])
+    groups = np.array([r.uploader_id for r in rows])
     unique_labels = sorted(set(labels.tolist()))
 
     def split_ok(mask_train: np.ndarray, mask_val: np.ndarray, mask_test: np.ndarray) -> bool:

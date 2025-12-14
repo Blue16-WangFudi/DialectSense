@@ -4,54 +4,82 @@
   "data": {
     "metadata_csv": "datasets/metadata.csv",
     "audio_dir": "datasets/oggs",
+    "id_col": "id",
     "label_col": "dialect.province",
-    "group_col": "uploader_id",
-    "id_col": "id"
+    "uploader_col": "uploader_id",
+    "min_votes": null,
+    "top_k_labels": 6,
+    "max_per_label": 30,
+    "max_total": 150
   },
-  "filter": {
-    "min_sound_length_sec": 1.0,
-    "max_sound_length_sec": 30.0,
-    "min_votes": null
+  "audio": {
+    "target_sr": 16000,
+    "min_sec": 1.0,
+    "trim_silence": {
+      "enabled": true,
+      "threshold_db": -40.0,
+      "min_silence_sec": 0.2
+    },
+    "normalize": {
+      "enabled": true,
+      "target_rms_dbfs": -20.0,
+      "max_gain_db": 20.0,
+      "peak_limit": 0.99
+    }
   },
-  "subset": {
-    "top_k_labels": 5,
-    "max_per_label": 120
+  "embed": {
+    "backend": "wavlm_large",
+    "model_id": "microsoft/wavlm-large",
+    "model_cache_dir": ".cache/modelscope",
+    "device": "auto",
+    "layer_start": 6,
+    "layer_end": 12,
+    "chunk": {
+      "max_sec": 12.0,
+      "strategy": "chunk",
+      "chunk_sec": 3.0,
+      "hop_sec": 1.5,
+      "agg": "mean",
+      "max_chunks": 20
+    }
   },
   "split": {
     "train_ratio": 0.7,
     "val_ratio": 0.1,
     "test_ratio": 0.2,
-    "max_tries": 50,
-    "min_groups_per_label": 3,
-    "max_label_drop_iterations": 50,
-    "min_per_label_train": 10,
-    "min_per_label_val": 3,
-    "min_per_label_test": 10
+    "max_tries": 500,
+    "min_groups_per_label": 2,
+    "max_label_drop_iterations": 200,
+    "min_per_label_train": 3,
+    "min_per_label_val": 1,
+    "min_per_label_test": 3
   },
-  "embed": {
-    "backend": "logmel_stats",
-    "sample_rate": 16000,
-    "n_mels": 64,
-    "win_ms": 25,
-    "hop_ms": 10,
-    "max_audio_sec": 12.0
+  "coarse": {
+    "enabled": true,
+    "k": 3,
+    "centroid": {
+      "method": "mean",
+      "trim_fraction": 0.1
+    },
+    "kmeans": {
+      "n_init": 20
+    }
   },
   "model": {
-    "svm": "linear_svc",
     "class_weight": "balanced",
-    "sample_weight_by_votes": null,
-    "calibration": "sigmoid_on_val"
+    "C": 1.0,
+    "max_iter": 8000,
+    "calibration": {
+      "enabled": true,
+      "method": "sigmoid"
+    }
   },
-  "cluster": {
-    "method": "umap_if_available_else_tsne",
-    "n_components": 2,
-    "perplexity": 30,
-    "max_points": 2000
-  },
-  "ui": {
-    "chunk_sec": 1.5,
-    "history_chunks": 10,
-    "vad_rms_threshold": 0.01,
-    "top_k": 3
+  "report": {
+    "max_labels_bar": 30,
+    "embedding_2d": {
+      "method": "umap_if_available_else_tsne",
+      "max_points": 2000,
+      "perplexity": 30
+    }
   }
 }
