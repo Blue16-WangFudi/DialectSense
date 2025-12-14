@@ -1,0 +1,57 @@
+{
+  "run_name": "smoke",
+  "seed": 42,
+  "data": {
+    "metadata_csv": "datasets/metadata.csv",
+    "audio_dir": "datasets/oggs",
+    "label_col": "dialect.province",
+    "group_col": "uploader_id",
+    "id_col": "id"
+  },
+  "filter": {
+    "min_sound_length_sec": 1.0,
+    "max_sound_length_sec": 30.0,
+    "min_votes": null
+  },
+  "subset": {
+    "top_k_labels": 5,
+    "max_per_label": 120
+  },
+  "split": {
+    "train_ratio": 0.7,
+    "val_ratio": 0.1,
+    "test_ratio": 0.2,
+    "max_tries": 50,
+    "min_groups_per_label": 3,
+    "max_label_drop_iterations": 50,
+    "min_per_label_train": 10,
+    "min_per_label_val": 3,
+    "min_per_label_test": 10
+  },
+  "embed": {
+    "backend": "logmel_stats",
+    "sample_rate": 16000,
+    "n_mels": 64,
+    "win_ms": 25,
+    "hop_ms": 10,
+    "max_audio_sec": 12.0
+  },
+  "model": {
+    "svm": "linear_svc",
+    "class_weight": "balanced",
+    "sample_weight_by_votes": null,
+    "calibration": "sigmoid_on_val"
+  },
+  "cluster": {
+    "method": "umap_if_available_else_tsne",
+    "n_components": 2,
+    "perplexity": 30,
+    "max_points": 2000
+  },
+  "ui": {
+    "chunk_sec": 1.5,
+    "history_chunks": 10,
+    "vad_rms_threshold": 0.01,
+    "top_k": 3
+  }
+}
