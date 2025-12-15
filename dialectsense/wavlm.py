@@ -43,6 +43,13 @@ class ChunkedEmbeddingResult:
     n_chunks: int
 
 
+@dataclass(frozen=True)
+class ChunkEmbedding:
+    start_sec: float
+    end_sec: float
+    embedding: np.ndarray  # float32 [dim]
+
+
 class WavLMEmbedder:
     def __init__(self, embed_cfg: dict[str, Any]):
         self.embed_cfg = embed_cfg
@@ -86,8 +93,30 @@ class WavLMEmbedder:
             return int(self.model.config.hidden_size)
         except Exception:
             return 1024
+    
+    def _embed_chunk(self, chunk: np.ndarray, sr: int) -> np.ndarray:
+        torch = self._torch
+        inputs = self.fe(chunk, sampling_rate=sr, return_tensors="pt")
+        input_values = inputs["input_values"].to(self.device)
+        attn = inputs.get("attention_mask")
+        if attn is not None:
+            attn = attn.to(self.device)
 
-    def embed_wav_path(self, wav_path: str | Path, chunk_cfg: dict[str, Any]) -> ChunkedEmbeddingResult:
+        out = self.model(input_values=input_values, attention_mask=attn, output_hidden_states=True)
+        hs = out.hidden_states
+        if hs is None:
+            raise RuntimeError("WavLMModel did not return hidden_states")
+
+        start = int(self.layer_start)
+        end = int(self.layer_end)
+        if end >= len(hs):
+            raise ValueError(f"Requested layer_end={end}, but model has {len(hs)-1} layers")
+        layers = hs[start : end + 1]
+        x = torch.stack(layers, dim=0).mean(dim=0)  # [1, T, D]
+        emb = x.mean(dim=1).squeeze(0)  # [D]
+        return _l2_normalize(emb.detach().to("cpu").float().numpy())
+
+    def embed_wav_path_chunks(self, wav_path: str | Path, chunk_cfg: dict[str, Any]) -> list[ChunkEmbedding]:
         wav_path = Path(wav_path)
         y, sr = sf.read(str(wav_path), dtype="float32", always_2d=False)
         y = np.asarray(y, dtype=np.float32).reshape(-1)
@@ -118,35 +147,21 @@ class WavLMEmbedder:
             idx = np.linspace(0, len(ranges) - 1, max_chunks).round().astype(int)
             ranges = [ranges[i] for i in idx.tolist()]
 
-        chunk_embs: list[np.ndarray] = []
+        out: list[ChunkEmbedding] = []
         torch = self._torch
         with torch.inference_mode():
             for (a, b) in ranges:
                 chunk = y[a:b]
-                inputs = self.fe(chunk, sampling_rate=sr, return_tensors="pt")
-                input_values = inputs["input_values"].to(self.device)
-                attn = inputs.get("attention_mask")
-                if attn is not None:
-                    attn = attn.to(self.device)
+                emb = self._embed_chunk(chunk, sr=sr)
+                out.append(ChunkEmbedding(start_sec=float(a) / float(sr), end_sec=float(b) / float(sr), embedding=emb))
+        return out
 
-                out = self.model(input_values=input_values, attention_mask=attn, output_hidden_states=True)
-                hs = out.hidden_states
-                if hs is None:
-                    raise RuntimeError("WavLMModel did not return hidden_states")
-
-                start = int(self.layer_start)
-                end = int(self.layer_end)
-                if end >= len(hs):
-                    raise ValueError(f"Requested layer_end={end}, but model has {len(hs)-1} layers")
-                layers = hs[start : end + 1]
-                x = torch.stack(layers, dim=0).mean(dim=0)  # [1, T, D]
-                emb = x.mean(dim=1).squeeze(0)  # [D]
-                chunk_embs.append(emb.detach().to("cpu").float().numpy())
-
-        if not chunk_embs:
+    def embed_wav_path(self, wav_path: str | Path, chunk_cfg: dict[str, Any]) -> ChunkedEmbeddingResult:
+        chunks = self.embed_wav_path_chunks(wav_path, chunk_cfg=chunk_cfg)
+        if not chunks:
             return ChunkedEmbeddingResult(embedding=np.zeros((self.dim,), dtype=np.float32), n_chunks=0)
 
-        chunk_arr = np.stack(chunk_embs, axis=0).astype(np.float32, copy=False)
+        chunk_arr = np.stack([c.embedding for c in chunks], axis=0).astype(np.float32, copy=False)
         agg = str(chunk_cfg.get("agg", "mean"))
         if agg == "mean" or chunk_arr.shape[0] == 1:
             emb_u = chunk_arr.mean(axis=0)
@@ -164,4 +179,3 @@ class WavLMEmbedder:
             raise ValueError("embed.chunk.agg must be 'mean' or 'attention'")
 
         return ChunkedEmbeddingResult(embedding=_l2_normalize(emb_u), n_chunks=int(chunk_arr.shape[0]))
-

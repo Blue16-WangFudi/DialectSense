@@ -8,3 +8,4 @@ torch
 transformers
 modelscope
 umap-learn
+gradio

@@ -1,4 +1,4 @@
-.PHONY: smoke preprocess embed split coarsen train eval report clean venv deps
+.PHONY: smoke preprocess embed split coarsen train eval report ui clean venv deps ffmpeg
 
 CONFIG ?= configs/smoke.json
 RUN_NAME ?= $(shell python3 -c "import json;print(json.load(open('$(CONFIG)','r',encoding='utf-8'))['run_name'])")
@@ -46,6 +46,10 @@ eval: deps ffmpeg
 report: deps ffmpeg
 	@mkdir -p "$(TMPDIR)"
 	@$(PY) -m dialectsense.cli report --config $(CONFIG)
+
+ui: deps ffmpeg
+	@mkdir -p "$(TMPDIR)"
+	@$(PY) -m dialectsense.cli ui --config $(CONFIG)
 
 smoke: CONFIG := configs/smoke.json
 smoke: preprocess embed split coarsen train eval report

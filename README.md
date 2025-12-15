@@ -19,6 +19,12 @@ make smoke
 
 Artifacts are written to `artifacts/<run_name>/` (for smoke: `artifacts/smoke/`).
 
+## Web UI
+
+```bash
+make ui CONFIG=configs/smoke.json
+```
+
 ## Dependencies
 
 - Python 3.10+

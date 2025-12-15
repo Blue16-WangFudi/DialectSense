@@ -32,9 +32,11 @@ pip install -r requirements.txt
 ```powershell
 python -m dialectsense.cli preprocess --config configs\smoke.json
 python -m dialectsense.cli embed      --config configs\smoke.json
+python -m dialectsense.cli split      --config configs\smoke.json
+python -m dialectsense.cli coarsen    --config configs\smoke.json
 python -m dialectsense.cli train      --config configs\smoke.json
 python -m dialectsense.cli eval       --config configs\smoke.json
-python -m dialectsense.cli cluster    --config configs\smoke.json
+python -m dialectsense.cli report     --config configs\smoke.json
 ```
 
 产物目录：`artifacts\smoke\`
@@ -47,11 +49,7 @@ python -m dialectsense.cli ui --config configs\smoke.json
 
 随后按终端输出的本地地址在浏览器打开。
 
-提示：如果你希望 UI 中的 `2D projection (optional)` 有内容显示，请至少先运行一次：
-
-```powershell
-python -m dialectsense.cli cluster --config configs\smoke.json
-```
+提示：UI 会读取 `artifacts\<run_name>\` 下的训练/评估结果（图表、混淆矩阵、top confusions 等），若尚未生成，可在 UI 的 “Run” 页签直接点击运行各阶段。
 
 ## 4) Full 模式（服务器/高算力机器）
 
@@ -60,9 +58,11 @@ python -m dialectsense.cli cluster --config configs\smoke.json
 ```powershell
 python -m dialectsense.cli preprocess --config configs\full.json
 python -m dialectsense.cli embed      --config configs\full.json
+python -m dialectsense.cli split      --config configs\full.json
+python -m dialectsense.cli coarsen    --config configs\full.json
 python -m dialectsense.cli train      --config configs\full.json
 python -m dialectsense.cli eval       --config configs\full.json
-python -m dialectsense.cli cluster    --config configs\full.json
+python -m dialectsense.cli report     --config configs\full.json
 ```
 
 ## 常见问题
