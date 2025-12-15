@@ -307,6 +307,7 @@ def _predict_one(
 def launch(default_config_path: str = "configs/smoke.json") -> None:
     _ensure_local_ffmpeg_on_path()
     import gradio as gr
+    import inspect
 
     repo = _repo_root()
     config_choices = []
@@ -428,5 +429,11 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
         demo.load(fn=_set_conf_table, inputs=[conf_pair], outputs=[conf_table])
         demo.load(fn=_do_qc, inputs=[config_path, qc_limit, kept_only], outputs=[qc_table])
 
-    demo.queue(concurrency_count=1)
+    queue_sig = inspect.signature(demo.queue)
+    if "concurrency_count" in queue_sig.parameters:
+        demo.queue(concurrency_count=1)
+    elif "default_concurrency_limit" in queue_sig.parameters:
+        demo.queue(default_concurrency_limit=1)
+    else:
+        demo.queue()
     demo.launch()
