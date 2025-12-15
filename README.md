@@ -28,8 +28,28 @@ make ui CONFIG=configs/smoke.json
 ## Dependencies
 
 - Python 3.10+
-- `ffmpeg` is required for `.ogg` decoding + silence trimming. `make smoke` bootstraps a local static `ffmpeg` into `.cache/ffmpeg/` if you don't have a system `ffmpeg`.
-- Python deps: `make deps` (handled automatically by `make smoke`)
+- `make` (GNU Make). If you don't have it, either install it (Linux: `sudo apt-get install make`) or run the CLI commands directly (see below / `RUN_WINDOWS.md`).
+- `ffmpeg` is required for `.ogg` decoding + silence trimming. The Makefile bootstraps a local static `ffmpeg` into `.cache/ffmpeg/` if you don't have a system `ffmpeg`.
+- Python deps: `make deps` (handled automatically by `make smoke` / `make ui`)
+
+## Makefile Usage
+
+The Makefile is the recommended “one-command” runner on Linux/macOS/WSL:
+
+```bash
+make smoke
+make ui CONFIG=configs/smoke.json
+make clean CONFIG=configs/smoke.json
+```
+
+You can switch configs via `CONFIG=...`:
+
+```bash
+make smoke CONFIG=configs/smoke.json
+make preprocess embed split coarsen train eval report CONFIG=configs/full.json
+```
+
+If your environment does not have `make` (common on Windows), follow `RUN_WINDOWS.md` and run the Python CLI commands instead.
 
 ## Outputs
 
@@ -53,6 +73,7 @@ Each stage is runnable independently (and reuses cached artifacts when present):
 .venv/bin/python -m dialectsense.cli train      --config configs/smoke.json
 .venv/bin/python -m dialectsense.cli eval       --config configs/smoke.json
 .venv/bin/python -m dialectsense.cli report     --config configs/smoke.json
+.venv/bin/python -m dialectsense.cli ui         --config configs/smoke.json
 ```
 
 See `DESIGN.md` for the pipeline rationale and configuration keys.
