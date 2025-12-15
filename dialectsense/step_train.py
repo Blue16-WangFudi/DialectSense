@@ -8,7 +8,7 @@ from typing import Any
 
 import joblib
 import numpy as np
-from sklearn.calibration import CalibratedClassifierCV
+from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVC
@@ -41,6 +41,25 @@ class DecisionToProbaWrapper:
         if scores.ndim == 1:
             scores = np.stack([-scores, scores], axis=1)
         return _softmax(scores.astype(np.float64))
+
+
+@dataclass
+class DecisionLogitCalibrator:
+    estimator: Any
+    calibrator: LogisticRegression
+    classes_: np.ndarray
+
+    def _scores(self, X: np.ndarray) -> np.ndarray:
+        s = self.estimator.decision_function(X)
+        if s.ndim == 1:
+            s = s.reshape(-1, 1)
+        return s
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        return self.calibrator.predict(self._scores(X))
+
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        return self.calibrator.predict_proba(self._scores(X))
 
 
 def run_train(cfg: dict[str, Any], artifact_dir: Path) -> Path:
@@ -83,11 +102,23 @@ def run_train(cfg: dict[str, Any], artifact_dir: Path) -> Path:
     pipe.fit(X_train, y_train)
 
     calibrated: Any
-    if len(set(y_val.tolist())) >= 2 and bool(model_cfg.get("calibration", {}).get("enabled", True)):
-        calibrated = CalibratedClassifierCV(pipe, method=str(model_cfg.get("calibration", {}).get("method", "sigmoid")), cv="prefit")
-        calibrated.fit(X_val, y_val)
+    classes_ = np.array(sorted(set(y_train.tolist())), dtype=int)
+    cal_cfg = model_cfg.get("calibration", {}) if isinstance(model_cfg.get("calibration"), dict) else {}
+    cal_enabled = bool(cal_cfg.get("enabled", True))
+    if cal_enabled and len(set(y_val.tolist())) >= 2:
+        present = set(y_val.tolist())
+        missing = [int(c) for c in classes_.tolist() if int(c) not in present]
+        if missing:
+            log.warning("train: calibration skipped (val missing classes=%s)", missing)
+            calibrated = DecisionToProbaWrapper(estimator=pipe, classes_=classes_)
+        else:
+            scores = pipe.decision_function(X_val)
+            if scores.ndim == 1:
+                scores = scores.reshape(-1, 1)
+            lr = LogisticRegression(max_iter=int(cal_cfg.get("max_iter", 2000)))
+            lr.fit(scores, y_val)
+            calibrated = DecisionLogitCalibrator(estimator=pipe, calibrator=lr, classes_=classes_)
     else:
-        classes_ = np.array(sorted(set(y_train.tolist())), dtype=int)
         calibrated = DecisionToProbaWrapper(estimator=pipe, classes_=classes_)
 
     models_dir = ensure_dir(artifact_dir / "models")
@@ -114,4 +145,3 @@ def run_train(cfg: dict[str, Any], artifact_dir: Path) -> Path:
 
     log.info("train: wrote %s", out_path)
     return out_path
-
