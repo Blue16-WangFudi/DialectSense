@@ -4,6 +4,7 @@ import hashlib
 import json
 import random
 import tempfile
+import os
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,13 @@ def configure_temp_dir(base_dir: str | Path) -> Path:
     Some environments (sandboxed/WSL mounts) may not allow /tmp; using an artifacts-local
     temp directory makes the pipeline more reliable.
     """
+    # Gradio relies on a stable temp/upload dir; if it's set, do not override it per-run.
+    gradio_tmp = os.environ.get("GRADIO_TEMP_DIR")
+    if gradio_tmp:
+        p = ensure_dir(Path(gradio_tmp))
+        tempfile.tempdir = str(p)
+        return p
+
     p = ensure_dir(Path(base_dir) / "tmp")
     tempfile.tempdir = str(p)
     return p

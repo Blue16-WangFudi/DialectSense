@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import shutil
+import tempfile
 import time
 import traceback
 import uuid
@@ -19,7 +20,6 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from ..audio_preprocess import preprocess_audio
 from ..config import load_config, resolve_paths
 from ..pipeline import (
     ensure_coarsen,
@@ -214,16 +214,14 @@ def _load_results(config_path: str) -> tuple[str, dict[str, Any], str, tuple[lis
 
 def _predict_one(
     config_path: str,
-    audio_path: str | None,
+    audio: Any,
     top_k: int,
     timeline: bool,
 ) -> tuple[str, list[list[Any]], np.ndarray | None]:
-    if not audio_path:
+    if audio is None:
         return "No audio provided.", ([], []), None
 
     _ensure_local_ffmpeg_on_path()
-    if not shutil.which("ffmpeg"):
-        raise RuntimeError("ffmpeg not found. Run `python bootstrap_ffmpeg.py` or install ffmpeg on PATH.")
 
     ctx = _load_ctx(config_path)
     art = ctx.artifact_dir
@@ -238,16 +236,33 @@ def _predict_one(
     if c2l_path.exists():
         cluster_to_labels = _read_json(c2l_path)
 
-    audio_cfg = ctx.cfg.get("audio", {}) if isinstance(ctx.cfg.get("audio"), dict) else {}
     embed_cfg = ctx.cfg.get("embed", {}) if isinstance(ctx.cfg.get("embed"), dict) else {}
     chunk_cfg = embed_cfg.get("chunk", {}) if isinstance(embed_cfg.get("chunk"), dict) else {}
+    chunks = []
+    emb = None
 
-    tmp_dir = ensure_dir(art / "tmp" / "ui_predict")
-    out_wav = tmp_dir / f"input_{uuid.uuid4().hex}.wav"
-    preprocess_audio(audio_path, out_wav, audio_cfg=audio_cfg)
+    # Preferred: use numpy audio (avoids Gradio file-cache restrictions).
+    if isinstance(audio, tuple) and len(audio) == 2:
+        sr, y = audio
+        sr, y = predictor.preprocess_audio_array(y, sr=int(sr))
+        chunks = predictor.embedder.embed_audio_chunks(y, sr=sr, chunk_cfg=chunk_cfg)
+        emb = predictor.embedder.embed_audio_chunked(y, sr=sr, chunk_cfg=chunk_cfg).embedding
+    else:
+        # Fallback: treat as filepath.
+        audio_path = str(audio)
+        if not shutil.which("ffmpeg"):
+            raise RuntimeError("ffmpeg not found. Run `python bootstrap_ffmpeg.py` or install ffmpeg on PATH.")
+        tmp_dir = ensure_dir(art / "tmp" / "ui_predict")
+        out_wav = tmp_dir / f"input_{uuid.uuid4().hex}.wav"
+        from ..audio_preprocess import preprocess_audio
 
-    chunks = predictor.embedder.embed_wav_path_chunks(out_wav, chunk_cfg=chunk_cfg)
-    emb = predictor.embedder.embed_wav_path(out_wav, chunk_cfg=chunk_cfg).embedding
+        audio_cfg = ctx.cfg.get("audio", {}) if isinstance(ctx.cfg.get("audio"), dict) else {}
+        preprocess_audio(audio_path, out_wav, audio_cfg=audio_cfg)
+        chunks = predictor.embedder.embed_wav_path_chunks(out_wav, chunk_cfg=chunk_cfg)
+        emb = predictor.embedder.embed_wav_path(out_wav, chunk_cfg=chunk_cfg).embedding
+
+    if emb is None:
+        return "No audio provided.", ([], []), None
 
     proba = model.predict_proba(emb.reshape(1, -1))[0].astype(np.float64)
     classes = getattr(model, "classes_", None)
@@ -296,12 +311,12 @@ def _predict_one(
 
 def _predict_one_safe(
     config_path: str,
-    audio_path: str | None,
+    audio: Any,
     top_k: int,
     timeline: bool,
 ) -> tuple[str, list[list[Any]], np.ndarray | None]:
     try:
-        return _predict_one(config_path, audio_path, top_k, timeline)
+        return _predict_one(config_path, audio, top_k, timeline)
     except Exception:
         return ("```text\n" + traceback.format_exc() + "\n```"), [], None
 
@@ -509,6 +524,14 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
     import inspect
 
     repo = _repo_root()
+    # IMPORTANT: keep Gradio upload/cache dir stable across config reloads.
+    # This avoids errors like: "Cannot move ... because it was not uploaded by a user."
+    gradio_tmp = Path(os.environ.get("GRADIO_TEMP_DIR") or (repo / ".cache" / "gradio")).resolve()
+    gradio_tmp.mkdir(parents=True, exist_ok=True)
+    os.environ["GRADIO_TEMP_DIR"] = str(gradio_tmp)
+    # Align Python tempdir to avoid surprises in other libs.
+    tempfile.tempdir = str(gradio_tmp)
+
     config_choices = []
     for p in [repo / "configs" / "smoke.json", repo / "configs" / "full.json"]:
         if p.exists():
@@ -569,7 +592,7 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
             with gr.Tab("Predict"):
                 gr.Markdown("Upload/record audio to run WavLM-Large → coarse model prediction.")
                 with gr.Row():
-                    audio_in = gr.Audio(sources=["microphone", "upload"], type="filepath", label="Audio input")
+                    audio_in = gr.Audio(sources=["microphone", "upload"], type="numpy", label="Audio input")
                 with gr.Row():
                     topk = gr.Slider(1, 10, value=5, step=1, label="Top-K")
                     show_timeline = gr.Checkbox(value=True, label="Chunk timeline (slow)")

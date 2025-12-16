@@ -128,13 +128,11 @@ class WavLMEmbedder:
         with torch.inference_mode():
             return self._embed_chunk(y, sr=int(sr))
 
-    def embed_wav_path_chunks(self, wav_path: str | Path, chunk_cfg: dict[str, Any]) -> list[ChunkEmbedding]:
-        wav_path = Path(wav_path)
-        y, sr = sf.read(str(wav_path), dtype="float32", always_2d=False)
+    def embed_audio_chunks(self, y: np.ndarray, sr: int, chunk_cfg: dict[str, Any]) -> list[ChunkEmbedding]:
         y = np.asarray(y, dtype=np.float32).reshape(-1)
         sr = int(sr)
-        if sr != 16000:
-            raise ValueError(f"Expected 16kHz wav, got sr={sr} for {wav_path}")
+        if y.size == 0:
+            return []
 
         max_sec = float(chunk_cfg.get("max_sec", 12.0))
         strategy = str(chunk_cfg.get("strategy", "chunk"))
@@ -168,8 +166,8 @@ class WavLMEmbedder:
                 out.append(ChunkEmbedding(start_sec=float(a) / float(sr), end_sec=float(b) / float(sr), embedding=emb))
         return out
 
-    def embed_wav_path(self, wav_path: str | Path, chunk_cfg: dict[str, Any]) -> ChunkedEmbeddingResult:
-        chunks = self.embed_wav_path_chunks(wav_path, chunk_cfg=chunk_cfg)
+    def embed_audio_chunked(self, y: np.ndarray, sr: int, chunk_cfg: dict[str, Any]) -> ChunkedEmbeddingResult:
+        chunks = self.embed_audio_chunks(y, sr=sr, chunk_cfg=chunk_cfg)
         if not chunks:
             return ChunkedEmbeddingResult(embedding=np.zeros((self.dim,), dtype=np.float32), n_chunks=0)
 
@@ -191,3 +189,45 @@ class WavLMEmbedder:
             raise ValueError("embed.chunk.agg must be 'mean' or 'attention'")
 
         return ChunkedEmbeddingResult(embedding=_l2_normalize(emb_u), n_chunks=int(chunk_arr.shape[0]))
+
+    def embed_wav_path_chunks(self, wav_path: str | Path, chunk_cfg: dict[str, Any]) -> list[ChunkEmbedding]:
+        wav_path = Path(wav_path)
+        y, sr = sf.read(str(wav_path), dtype="float32", always_2d=False)
+        y = np.asarray(y, dtype=np.float32).reshape(-1)
+        sr = int(sr)
+        if sr != 16000:
+            raise ValueError(f"Expected 16kHz wav, got sr={sr} for {wav_path}")
+
+        max_sec = float(chunk_cfg.get("max_sec", 12.0))
+        strategy = str(chunk_cfg.get("strategy", "chunk"))
+        chunk_sec = float(chunk_cfg.get("chunk_sec", 3.0))
+        hop_sec = float(chunk_cfg.get("hop_sec", 1.5))
+        max_chunks = chunk_cfg.get("max_chunks", 40)
+        if max_chunks is not None:
+            max_chunks = int(max_chunks)
+
+        eff_sec = float(y.size) / float(sr) if y.size else 0.0
+
+        ranges: list[tuple[int, int]] = [(0, y.size)]
+        if eff_sec > max_sec:
+            if strategy == "truncate":
+                ranges = [(0, min(y.size, int(round(max_sec * sr))))]
+            elif strategy == "chunk":
+                ranges = _iter_chunk_ranges(y.size, sr=sr, chunk_sec=chunk_sec, hop_sec=hop_sec)
+            else:
+                raise ValueError("embed.chunk.strategy must be 'chunk' or 'truncate'")
+
+        if max_chunks is not None and len(ranges) > max_chunks:
+            idx = np.linspace(0, len(ranges) - 1, max_chunks).round().astype(int)
+            ranges = [ranges[i] for i in idx.tolist()]
+
+        return self.embed_audio_chunks(y, sr=sr, chunk_cfg={**chunk_cfg, "max_sec": max_sec, "strategy": strategy, "chunk_sec": chunk_sec, "hop_sec": hop_sec, "max_chunks": max_chunks})
+
+    def embed_wav_path(self, wav_path: str | Path, chunk_cfg: dict[str, Any]) -> ChunkedEmbeddingResult:
+        wav_path = Path(wav_path)
+        y, sr = sf.read(str(wav_path), dtype="float32", always_2d=False)
+        y = np.asarray(y, dtype=np.float32).reshape(-1)
+        sr = int(sr)
+        if sr != 16000:
+            raise ValueError(f"Expected 16kHz wav, got sr={sr} for {wav_path}")
+        return self.embed_audio_chunked(y, sr=sr, chunk_cfg=chunk_cfg)
