@@ -10,3 +10,4 @@ __pycache__/
 web/
 artifacts.zip
 dialect_sense_datasets.zip
+latex/
