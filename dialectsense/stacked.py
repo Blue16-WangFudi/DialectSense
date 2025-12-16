@@ -54,10 +54,10 @@ class StackedCoarseClassifier:
 
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
         proba = self.meta.predict_proba(self._features(X))
-        proba = np.asarray(proba, dtype=np.float64, copy=False)
+        # Avoid using np.asarray(copy=...) for compatibility with older NumPy.
+        proba = np.asarray(proba, dtype=np.float64)
         # Align meta output columns to classes_ if needed
         meta_classes = getattr(self.meta, "classes_", None)
         if meta_classes is None:
             return proba
         return _align_columns(proba, np.asarray(meta_classes, dtype=int), self.classes_)
-
