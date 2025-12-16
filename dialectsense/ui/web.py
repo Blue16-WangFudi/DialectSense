@@ -219,7 +219,7 @@ def _predict_one(
     timeline: bool,
 ) -> tuple[str, list[list[Any]], np.ndarray | None]:
     if audio is None:
-        return "No audio provided.", ([], []), None
+        return "No audio provided.", [], None
 
     _ensure_local_ffmpeg_on_path()
 
@@ -262,7 +262,7 @@ def _predict_one(
         emb = predictor.embedder.embed_wav_path(out_wav, chunk_cfg=chunk_cfg).embedding
 
     if emb is None:
-        return "No audio provided.", ([], []), None
+        return "No audio provided.", [], None
 
     proba = model.predict_proba(emb.reshape(1, -1))[0].astype(np.float64)
     classes = getattr(model, "classes_", None)
