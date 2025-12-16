@@ -69,7 +69,8 @@ def _list_pngs(fig_dir: Path) -> list[tuple[str, str]]:
     if not fig_dir.exists():
         return []
     items = sorted(fig_dir.glob("*.png"))
-    return [(p.name, str(p)) for p in items]
+    # gr.Gallery expects (image, caption) tuples when using tuples.
+    return [(str(p), p.name) for p in items]
 
 
 def _read_csv_rows(path: Path, limit: int | None = None) -> list[dict[str, str]]:
@@ -293,6 +294,18 @@ def _predict_one(
     return md, rows, timeline_img
 
 
+def _predict_one_safe(
+    config_path: str,
+    audio_path: str | None,
+    top_k: int,
+    timeline: bool,
+) -> tuple[str, list[list[Any]], np.ndarray | None]:
+    try:
+        return _predict_one(config_path, audio_path, top_k, timeline)
+    except Exception:
+        return ("```text\n" + traceback.format_exc() + "\n```"), [], None
+
+
 _PREDICTOR_CACHE: dict[str, tuple[float, CoarsePredictor]] = {}
 
 
@@ -470,6 +483,26 @@ def _rt_step(
     return state, status, top_rows, img
 
 
+def _rt_step_safe(
+    audio: Any,
+    cfg_path: str,
+    state: RealtimeState,
+    chunk_sec: float,
+    hop_sec: float,
+    top_k: int,
+    max_points: int,
+    ema_alpha: float,
+) -> tuple[RealtimeState, str, list[list[Any]], np.ndarray]:
+    try:
+        return _rt_step(audio, cfg_path, state, chunk_sec, hop_sec, top_k, max_points, ema_alpha)
+    except Exception:
+        if state is None:
+            state = RealtimeState()
+        status = "```text\n" + traceback.format_exc() + "\n```"
+        img = _render_proba_lines(state.times, state.probas, state.classes)
+        return state, status, [], img
+
+
 def launch(default_config_path: str = "configs/smoke.json") -> None:
     _ensure_local_ffmpeg_on_path()
     import gradio as gr
@@ -525,7 +558,7 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
                 )
 
             with gr.Tab("Figures"):
-                figs = gr.Gallery(label="artifacts/<run>/figures/*.png", columns=3, height=560)
+                figs = gr.Gallery(label="artifacts/<run>/figures/*.png", columns=3, height=560, format="png")
 
             with gr.Tab("Audio QC"):
                 with gr.Row():
@@ -608,15 +641,21 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
             btn.click(fn=_do_reload, inputs=[config_path], outputs=[overview, metrics, cluster_md, conf_pair, figs, warn])
             btn.click(fn=_set_conf_table, inputs=[conf_pair], outputs=[conf_table])
 
-        pred_btn.click(fn=_predict_one, inputs=[config_path, audio_in, topk, show_timeline], outputs=[pred_md, pred_table, pred_timeline])
+        pred_btn.click(
+            fn=_predict_one_safe,
+            inputs=[config_path, audio_in, topk, show_timeline],
+            outputs=[pred_md, pred_table, pred_timeline],
+            time_limit=1800,
+        )
 
         rt_reset_btn.click(fn=_rt_reset, inputs=[config_path, rt_chunk, rt_hop], outputs=[rt_state, rt_status, rt_table, rt_chart])
         rt_audio.stream(
-            fn=_rt_step,
+            fn=_rt_step_safe,
             inputs=[rt_audio, config_path, rt_state, rt_chunk, rt_hop, rt_topk, rt_points, rt_ema],
             outputs=[rt_state, rt_status, rt_table, rt_chart],
-            stream_every=0.8,
+            stream_every=1.2,
             trigger_mode="always_last",
+            time_limit=1800,
         )
 
         demo.load(fn=_do_reload, inputs=[config_path], outputs=[overview, metrics, cluster_md, conf_pair, figs, warn])
@@ -631,4 +670,4 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
         demo.queue(default_concurrency_limit=1)
     else:
         demo.queue()
-    demo.launch()
+    demo.launch(allowed_paths=[str(repo)], show_error=True)
