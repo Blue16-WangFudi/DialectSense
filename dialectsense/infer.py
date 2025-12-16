@@ -23,14 +23,15 @@ def _to_mono_f32(y: np.ndarray) -> np.ndarray:
     y = np.asarray(y)
     if y.size == 0:
         return np.zeros((0,), dtype=np.float32)
+    # If audio comes in as int PCM (e.g. Gradio numpy audio), scale before averaging channels.
+    if y.dtype.kind in {"i", "u"}:
+        y = y.astype(np.float32) / max(1.0, float(np.iinfo(y.dtype).max))
     if y.ndim == 2:
         # Accept both (samples, channels) and (channels, samples).
         if y.shape[0] <= 4 and y.shape[1] > y.shape[0]:
             y = y.mean(axis=0)
         else:
             y = y.mean(axis=1)
-    if y.dtype.kind in {"i", "u"}:
-        y = y.astype(np.float32) / max(1.0, float(np.iinfo(y.dtype).max))
     return np.asarray(y, dtype=np.float32).reshape(-1)
 
 

@@ -45,6 +45,32 @@ from ..streaming import AudioStreamChunker
 
 log = logging.getLogger("dialectsense")
 
+def _configure_matplotlib_fonts() -> None:
+    # Best-effort CJK font setup so plot legends can display Chinese labels.
+    try:
+        from matplotlib import font_manager
+
+        candidates = [
+            "Noto Sans CJK SC",
+            "Source Han Sans SC",
+            "WenQuanYi Zen Hei",
+            "SimHei",
+            "Microsoft YaHei",
+            "Arial Unicode MS",
+        ]
+        available = {f.name for f in font_manager.fontManager.ttflist}
+        for name in candidates:
+            if name in available:
+                cur = list(matplotlib.rcParams.get("font.sans-serif", []))
+                matplotlib.rcParams["font.sans-serif"] = [name, *cur]
+                matplotlib.rcParams["axes.unicode_minus"] = False
+                break
+    except Exception:
+        return
+
+
+_configure_matplotlib_fonts()
+
 try:
     # Used only for Gradio special-args injection (request.session_hash).
     from gradio.routes import Request as GradioRequest
@@ -399,20 +425,38 @@ def _rt_get_state(session_id: str | None, provided: RealtimeState | None) -> Rea
     now = time.time()
     _rt_prune_cache(now)
     sid = session_id or "default"
-    if provided is not None:
-        provided.session_id = sid
-        _RT_SESSION_CACHE[sid] = (now, provided)
-        return provided
     cached = _RT_SESSION_CACHE.get(sid)
-    if cached is not None:
-        st = cached[1]
-        st.session_id = sid
-        _RT_SESSION_CACHE[sid] = (now, st)
-        return st
-    st = RealtimeState()
-    st.session_id = sid
-    _RT_SESSION_CACHE[sid] = (now, st)
-    return st
+    cached_state = cached[1] if cached is not None else None
+
+    def _score(st: RealtimeState | None) -> tuple[int, int, int]:
+        if st is None:
+            return (0, 0, 0)
+        buf = 0
+        try:
+            if st.chunker is not None:
+                buf = int(st.chunker.buffered_samples)
+        except Exception:
+            buf = 0
+        t = len(st.times) if st.times is not None else 0
+        p = len(st.pending) if st.pending is not None else 0
+        return (buf, t, p)
+
+    # If Gradio provides a "fresh" state each callback (buggy persistence), do NOT overwrite
+    # a more-advanced cached state. Prefer whichever has progressed further.
+    chosen: RealtimeState
+    if cached_state is None and provided is None:
+        chosen = RealtimeState()
+    elif cached_state is None and provided is not None:
+        chosen = provided
+    elif cached_state is not None and provided is None:
+        chosen = cached_state
+    else:
+        assert cached_state is not None and provided is not None
+        chosen = provided if _score(provided) > _score(cached_state) else cached_state
+
+    chosen.session_id = sid
+    _RT_SESSION_CACHE[sid] = (now, chosen)
+    return chosen
 
 
 def _rt_put_state(st: RealtimeState) -> None:
@@ -435,7 +479,22 @@ def _format_topk_clusters(
     return rows
 
 
-def _render_proba_lines(times: list[float], probas: list[list[float]], classes: list[int], max_lines: int = 12) -> np.ndarray:
+def _cluster_legend(cluster_to_labels: dict[str, list[str]], cid: int) -> str:
+    labels = cluster_to_labels.get(str(int(cid)), [])
+    if not labels:
+        return str(int(cid))
+    short = "、".join(labels[:2]) + ("…" if len(labels) > 2 else "")
+    return f"{int(cid)}:{short}"
+
+
+def _render_proba_lines(
+    times: list[float],
+    probas: list[list[float]],
+    classes: list[int],
+    plot_class_ids: list[int] | None = None,
+    legend_map: dict[int, str] | None = None,
+    max_lines: int = 12,
+) -> np.ndarray:
     fig, ax = plt.subplots(figsize=(8.2, 3.1))
     ax.set_ylim(0.0, 1.0)
     ax.set_xlabel("time (s)")
@@ -446,23 +505,38 @@ def _render_proba_lines(times: list[float], probas: list[list[float]], classes: 
     if times and probas and classes:
         t = np.asarray(times, dtype=np.float64)
         P = np.asarray(probas, dtype=np.float64)  # [T, C]
-        # Plot only top-N classes (by max confidence over history) for readability.
-        max_lines = int(min(len(classes), max(1, int(max_lines))))
-        if P.shape[1] > max_lines:
-            score = P.max(axis=0)
-            keep_idx = np.argsort(-score)[:max_lines]
+        cls = np.asarray(classes, dtype=int).reshape(-1)
+
+        max_lines = int(min(len(cls), max(1, int(max_lines))))
+        keep_idx: np.ndarray
+        if plot_class_ids:
+            want = [int(c) for c in plot_class_ids]
+            pos = {int(c): i for i, c in enumerate(cls.tolist())}
+            idx = [pos[c] for c in want if c in pos]
+            if idx:
+                keep_idx = np.asarray(idx[:max_lines], dtype=int)
+            else:
+                keep_idx = np.argsort(-P[-1])[:max_lines]
         else:
-            keep_idx = np.arange(P.shape[1])
-        use_hsv = max_lines > 20
+            # Default: Plot only top-N classes (by max confidence over history) for readability.
+            if P.shape[1] > max_lines:
+                score = P.max(axis=0)
+                keep_idx = np.argsort(-score)[:max_lines]
+            else:
+                keep_idx = np.arange(P.shape[1])
+
+        n_lines = int(keep_idx.size)
+        use_hsv = n_lines > 20
         cmap = plt.get_cmap("hsv" if use_hsv else "tab20")
         for k, j in enumerate(keep_idx.tolist()):
-            cid = classes[int(j)]
+            cid = int(cls[int(j)])
             if use_hsv:
-                c = cmap(float(k) / float(max(1, max_lines - 1)))
+                c = cmap(float(k) / float(max(1, n_lines - 1)))
             else:
                 c = cmap(k % 20)
-            ax.plot(t, P[:, j], linewidth=1.9, alpha=0.9, color=c, label=str(cid))
-        if max_lines <= 12:
+            lab = legend_map.get(cid, str(cid)) if legend_map is not None else str(cid)
+            ax.plot(t, P[:, j], linewidth=1.9, alpha=0.9, color=c, label=lab)
+        if n_lines <= 12:
             ax.legend(ncol=6, fontsize=8, frameon=False, loc="upper center", bbox_to_anchor=(0.5, -0.18))
 
     fig.tight_layout()
@@ -492,7 +566,8 @@ def _rt_reset(
     state.last_input_len = None
     status = "Ready. Start speaking; the chart updates after each fixed-length chunk."
     table = _df_value(["rank", "cluster_id", "conf", "cluster_labels"], [[1, "-", 0.0, "-"]])
-    img = _render_proba_lines([], [], state.classes, max_lines=6)
+    legend = {int(cid): _cluster_legend(pred.cluster_to_labels, int(cid)) for cid in state.classes}
+    img = _render_proba_lines([], [], state.classes, plot_class_ids=None, legend_map=legend, max_lines=6)
     _rt_put_state(state)
     return state, status, table, img
 
@@ -504,7 +579,6 @@ def _rt_step(
     chunk_sec: float,
     hop_sec: float,
     top_k: int,
-    lines_k: int,
     max_points: int,
     ema_alpha: float,
     debug: bool = False,
@@ -519,7 +593,6 @@ def _rt_step_safe(
     chunk_sec: float,
     hop_sec: float,
     top_k: int,
-    lines_k: int,
     max_points: int,
     ema_alpha: float,
     debug: bool = False,
@@ -547,8 +620,19 @@ def _rt_step_safe(
             st.pending = []
             st.classes = [int(c) for c in pred.classes.tolist()]
 
+        legend = {int(cid): _cluster_legend(pred.cluster_to_labels, int(cid)) for cid in (st.classes or [])}
+        plot_k = int(max(1, top_k))
+        plot_ids: list[int] | None = None
+        if st.probas and st.classes and len(st.probas[-1]) == len(st.classes):
+            p_last = np.asarray(st.probas[-1], dtype=np.float64)
+            c_last = np.asarray(st.classes, dtype=int)
+            idx_last = np.argsort(-p_last)[:plot_k]
+            plot_ids = [int(c_last[i]) for i in idx_last.tolist()]
+
         if audio is None:
-            img = _render_proba_lines(st.times, st.probas, st.classes, max_lines=int(lines_k))
+            img = _render_proba_lines(
+                st.times, st.probas, st.classes, plot_class_ids=plot_ids, legend_map=legend, max_lines=plot_k
+            )
             status = "Waiting for audio…"
             if debug:
                 status += (
@@ -562,7 +646,9 @@ def _rt_step_safe(
         sr_in, y_in = audio
         y_in = np.asarray(y_in)
         if y_in.size == 0:
-            img = _render_proba_lines(st.times, st.probas, st.classes, max_lines=int(lines_k))
+            img = _render_proba_lines(
+                st.times, st.probas, st.classes, plot_class_ids=plot_ids, legend_map=legend, max_lines=plot_k
+            )
             status = "Waiting for audio…"
             if debug:
                 status += f"\n\n`debug`: session={st.session_id} sr={sr_in} y.size=0 pending={len(st.pending)}"
@@ -570,30 +656,43 @@ def _rt_step_safe(
             yield st, status, _df_value(["rank", "cluster_id", "conf", "cluster_labels"], [[1, "-", 0.0, "-"]]), img
             return
 
-        # Gradio streaming may provide cumulative audio or per-chunk audio; handle both.
-        if y_in.ndim == 2:
-            if y_in.shape[0] <= 4 and y_in.shape[1] > y_in.shape[0]:
-                y_mono = y_in.mean(axis=0)
+        # Gradio streaming may provide cumulative audio (growing) or per-chunk audio (fixed size).
+        # Slice deltas along the *sample* axis without destroying dtype (int16 scaling happens later).
+        y_arr = y_in
+        sample_axis = 0
+        n_samples = int(y_arr.shape[0]) if y_arr.ndim >= 1 else 0
+        if y_arr.ndim == 2:
+            # Accept both (samples, channels) and (channels, samples)
+            if y_arr.shape[0] <= 4 and y_arr.shape[1] > y_arr.shape[0]:
+                sample_axis = 1
+                n_samples = int(y_arr.shape[1])
             else:
-                y_mono = y_in.mean(axis=1)
-        else:
-            y_mono = y_in
-        y_mono = np.asarray(y_mono, dtype=np.float32).reshape(-1)
-        if st.last_input_len is None:
-            y_delta = y_mono
-        else:
-            if y_mono.size > st.last_input_len:
-                y_delta = y_mono[st.last_input_len :]
-            else:
-                y_delta = y_mono
-        st.last_input_len = int(y_mono.size)
+                sample_axis = 0
+                n_samples = int(y_arr.shape[0])
 
-        if y_delta.size == 0:
-            img = _render_proba_lines(st.times, st.probas, st.classes, max_lines=int(lines_k))
+        if st.last_input_len is None:
+            y_delta_raw = y_arr
+            delta_samples = int(n_samples)
+        else:
+            if n_samples > int(st.last_input_len):
+                if sample_axis == 0:
+                    y_delta_raw = y_arr[int(st.last_input_len) :] if y_arr.ndim == 1 else y_arr[int(st.last_input_len) :, :]
+                else:
+                    y_delta_raw = y_arr[:, int(st.last_input_len) :]
+                delta_samples = int(n_samples - int(st.last_input_len))
+            else:
+                y_delta_raw = y_arr
+                delta_samples = int(n_samples)
+        st.last_input_len = int(n_samples)
+
+        if y_delta_raw.size == 0:
+            img = _render_proba_lines(
+                st.times, st.probas, st.classes, plot_class_ids=plot_ids, legend_map=legend, max_lines=plot_k
+            )
             status = "Listening…"
             if debug:
                 status += (
-                    f"\n\n`debug`: session={st.session_id} sr={sr_in} recv={int(y_mono.size)} delta=0 "
+                    f"\n\n`debug`: session={st.session_id} sr={sr_in} recv={int(n_samples)} delta=0 "
                     f"pending={len(st.pending)} buffered={float(st.chunker.buffered_sec) if st.chunker else 0.0:.2f}s"
                 )
             _rt_put_state(st)
@@ -602,20 +701,22 @@ def _rt_step_safe(
 
         # Push audio into chunker (after resampling to target sr). Inference can be slow; we surface a quick
         # "processing…" update before doing WavLM forward pass when a chunk becomes available.
-        _, y_delta_16k = pred.preprocess_audio_array(y_delta, sr=int(sr_in))
+        _, y_delta_16k = pred.preprocess_audio_array(y_delta_raw, sr=int(sr_in))
         for t_end, chunk in st.chunker.push(y_delta_16k):
             st.pending.append((t_end, chunk))
         if len(st.pending) > 20:
             st.pending = st.pending[-20:]
 
         if not st.pending:
-            img = _render_proba_lines(st.times, st.probas, st.classes, max_lines=int(lines_k))
+            img = _render_proba_lines(
+                st.times, st.probas, st.classes, plot_class_ids=plot_ids, legend_map=legend, max_lines=plot_k
+            )
             buf = float(st.chunker.buffered_sec) if st.chunker is not None else 0.0
             need = float(st.chunker.chunk_sec) if st.chunker is not None else float(chunk_sec)
             status = f"Listening… (buffering: {buf:.2f}s / {need:.2f}s)"
             if debug:
                 status += (
-                    f"\n\n`debug`: session={st.session_id} sr={sr_in} recv={int(y_mono.size)} delta={int(y_delta.size)} "
+                    f"\n\n`debug`: session={st.session_id} sr={sr_in} recv={int(n_samples)} delta={int(delta_samples)} "
                     f"delta@16k={int(y_delta_16k.size)} pending={len(st.pending)}"
                 )
             _rt_put_state(st)
@@ -628,10 +729,12 @@ def _rt_step_safe(
         if debug:
             buf = float(st.chunker.buffered_sec) if st.chunker is not None else 0.0
             status += (
-                f"\n\n`debug`: session={st.session_id} sr={sr_in} recv={int(y_mono.size)} delta={int(y_delta.size)} "
+                f"\n\n`debug`: session={st.session_id} sr={sr_in} recv={int(n_samples)} delta={int(delta_samples)} "
                 f"pending={len(st.pending)} buffered={buf:.2f}s"
             )
-        img = _render_proba_lines(st.times, st.probas, st.classes, max_lines=int(lines_k))
+        img = _render_proba_lines(
+            st.times, st.probas, st.classes, plot_class_ids=plot_ids, legend_map=legend, max_lines=plot_k
+        )
         _rt_put_state(st)
         yield st, status, _df_value(["rank", "cluster_id", "conf", "cluster_labels"], [[1, "-", 0.0, "-"]]), img
 
@@ -662,6 +765,9 @@ def _rt_step_safe(
         proba_now = np.asarray(st.probas[-1], dtype=np.float64)
         classes_now = np.asarray(st.classes, dtype=int)
         top_rows = _format_topk_clusters(pred.cluster_to_labels, classes_now, proba_now, int(top_k))
+        idx_plot = np.argsort(-proba_now)[:plot_k]
+        plot_ids = [int(classes_now[i]) for i in idx_plot.tolist()]
+        legend = {int(cid): _cluster_legend(pred.cluster_to_labels, int(cid)) for cid in st.classes}
 
         best = int(classes_now[int(np.argmax(proba_now))])
         best_detail = pred.cluster_to_labels.get(str(best), [])
@@ -673,16 +779,18 @@ def _rt_step_safe(
         if debug:
             buf = float(st.chunker.buffered_sec) if st.chunker is not None else 0.0
             status += (
-                f"\n\n`debug`: session={st.session_id} sr={sr_in} recv={int(y_mono.size)} delta={int(y_delta.size)} "
+                f"\n\n`debug`: session={st.session_id} sr={sr_in} recv={int(n_samples)} delta={int(delta_samples)} "
                 f"buffered={buf:.2f}s points={len(st.times)}"
             )
-        img = _render_proba_lines(st.times, st.probas, st.classes, max_lines=int(lines_k))
+        img = _render_proba_lines(
+            st.times, st.probas, st.classes, plot_class_ids=plot_ids, legend_map=legend, max_lines=plot_k
+        )
         _rt_put_state(st)
         yield st, status, _df_value(["rank", "cluster_id", "conf", "cluster_labels"], top_rows), img
     except Exception:
         st = state if state is not None else RealtimeState()
         status = "```text\n" + traceback.format_exc() + "\n```"
-        img = _render_proba_lines(st.times, st.probas, st.classes, max_lines=int(lines_k) if lines_k else 6)
+        img = _render_proba_lines(st.times, st.probas, st.classes, plot_class_ids=None, legend_map=None, max_lines=6)
         _rt_put_state(st)
         yield st, status, _df_value(["rank", "cluster_id", "conf", "cluster_labels"], []), img
 
@@ -776,7 +884,7 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
             with gr.Tab("Realtime"):
                 gr.Markdown(
                     "Realtime fixed-chunk inference from microphone streaming. "
-                    "Shows per-cluster confidence over time (line chart). "
+                    "Shows Top-K per-cluster confidence over time (line chart). "
                     "Tip: first run may need to download/load WavLM; click Warmup and wait."
                 )
                 rt_state = gr.State(RealtimeState())
@@ -786,7 +894,6 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
                     rt_points = gr.Slider(10, 240, value=60, step=5, label="History points")
                 with gr.Row():
                     rt_topk = gr.Slider(1, 12, value=5, step=1, label="Top-K table")
-                    rt_lines = gr.Slider(1, 30, value=6, step=1, label="Lines to plot (Top-N by history)")
                     rt_ema = gr.Slider(0.0, 1.0, value=0.35, step=0.05, label="EMA smoothing α (0=off)")
                     rt_debug = gr.Checkbox(value=False, label="Debug status")
                     rt_warmup_btn = gr.Button("Warmup WavLM")
@@ -794,7 +901,7 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
                 rt_audio = gr.Audio(sources=["microphone"], type="numpy", format="wav", streaming=True, label="Microphone (streaming)")
                 rt_status = gr.Markdown()
                 rt_table = gr.Dataframe(headers=["rank", "cluster_id", "conf", "cluster_labels"], interactive=False)
-                rt_chart = gr.Image(label="Confidence lines", type="numpy")
+                rt_chart = gr.Image(label="Top-K confidence lines", type="numpy")
 
         def _do_reload(cfg_path: str):
             return _load_results(cfg_path)
@@ -859,7 +966,6 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
             chunk_sec: float,
             hop_sec: float,
             top_k: int,
-            lines_k: int,
             max_points: int,
             ema_alpha: float,
             debug: bool,
@@ -872,7 +978,6 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
                 chunk_sec,
                 hop_sec,
                 top_k,
-                lines_k,
                 max_points,
                 ema_alpha,
                 debug,
@@ -893,7 +998,7 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
         rt_warmup_btn.click(fn=_warmup, inputs=[config_path], outputs=[rt_status], time_limit=1800)
         rt_audio.stream(
             fn=_rt_step_wrapped,
-            inputs=[rt_audio, config_path, rt_state, rt_chunk, rt_hop, rt_topk, rt_lines, rt_points, rt_ema, rt_debug],
+            inputs=[rt_audio, config_path, rt_state, rt_chunk, rt_hop, rt_topk, rt_points, rt_ema, rt_debug],
             outputs=[rt_state, rt_status, rt_table, rt_chart],
             stream_every=0.8,
             trigger_mode="always_last",
