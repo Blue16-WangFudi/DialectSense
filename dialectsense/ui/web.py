@@ -45,6 +45,14 @@ from ..streaming import AudioStreamChunker
 
 log = logging.getLogger("dialectsense")
 
+try:
+    # Used only for Gradio special-args injection (request.session_hash).
+    from gradio.routes import Request as GradioRequest
+except Exception:  # pragma: no cover
+    GradioRequest = Any  # type: ignore[misc,assignment]
+
+_RT_SESSION_CACHE: dict[str, tuple[float, "RealtimeState"]] = {}
+
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
@@ -362,6 +370,7 @@ class RealtimeState:
     classes: list[int] = None  # type: ignore[assignment]
     ema: list[float] | None = None
     pending: list[tuple[float, np.ndarray]] = None  # type: ignore[assignment]
+    session_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.times is None:
@@ -372,6 +381,45 @@ class RealtimeState:
             self.classes = []
         if self.pending is None:
             self.pending = []
+
+
+def _rt_prune_cache(now: float, max_age_sec: float = 1800.0) -> None:
+    if not _RT_SESSION_CACHE:
+        return
+    dead = [k for k, (ts, _) in _RT_SESSION_CACHE.items() if (now - float(ts)) > float(max_age_sec)]
+    for k in dead:
+        _RT_SESSION_CACHE.pop(k, None)
+
+
+def _rt_get_state(session_id: str | None, provided: RealtimeState | None) -> RealtimeState:
+    """
+    Some Gradio/proxy deployments don't reliably persist `gr.State` updates for `.stream()` events.
+    To make buffering robust, we also keep a server-side per-session cache keyed by `request.session_hash`.
+    """
+    now = time.time()
+    _rt_prune_cache(now)
+    sid = session_id or "default"
+    if provided is not None:
+        provided.session_id = sid
+        _RT_SESSION_CACHE[sid] = (now, provided)
+        return provided
+    cached = _RT_SESSION_CACHE.get(sid)
+    if cached is not None:
+        st = cached[1]
+        st.session_id = sid
+        _RT_SESSION_CACHE[sid] = (now, st)
+        return st
+    st = RealtimeState()
+    st.session_id = sid
+    _RT_SESSION_CACHE[sid] = (now, st)
+    return st
+
+
+def _rt_put_state(st: RealtimeState) -> None:
+    now = time.time()
+    _rt_prune_cache(now)
+    sid = st.session_id or "default"
+    _RT_SESSION_CACHE[sid] = (now, st)
 
 
 def _format_topk_clusters(
@@ -425,18 +473,27 @@ def _render_proba_lines(times: list[float], probas: list[list[float]], classes: 
     return plt.imread(buf)
 
 
-def _rt_reset(cfg_path: str, chunk_sec: float, hop_sec: float) -> tuple[RealtimeState, str, dict[str, Any], np.ndarray]:
+def _rt_reset(
+    cfg_path: str, chunk_sec: float, hop_sec: float, request: Any = None
+) -> tuple[RealtimeState, str, dict[str, Any], np.ndarray]:
     pred = _get_predictor(cfg_path)
-    state = RealtimeState()
+    session_id = None
+    try:
+        session_id = getattr(request, "session_hash", None)
+    except Exception:
+        session_id = None
+    state = _rt_get_state(session_id, None)
     state.chunker = AudioStreamChunker(sr=int(pred.target_sr), chunk_sec=float(chunk_sec), hop_sec=float(hop_sec))
     state.classes = [int(c) for c in pred.classes.tolist()]
     state.times = []
     state.probas = []
     state.ema = None
     state.pending = []
+    state.last_input_len = None
     status = "Ready. Start speaking; the chart updates after each fixed-length chunk."
     table = _df_value(["rank", "cluster_id", "conf", "cluster_labels"], [[1, "-", 0.0, "-"]])
     img = _render_proba_lines([], [], state.classes, max_lines=6)
+    _rt_put_state(state)
     return state, status, table, img
 
 
@@ -466,15 +523,22 @@ def _rt_step_safe(
     max_points: int,
     ema_alpha: float,
     debug: bool = False,
+    request: Any = None,
 ):
     try:
-        st = state if state is not None else RealtimeState()
+        session_id = None
+        try:
+            session_id = getattr(request, "session_hash", None)
+        except Exception:
+            session_id = None
+        st = _rt_get_state(session_id, state if isinstance(state, RealtimeState) else None)
         pred = _get_predictor(cfg_path)
 
         # (Re)initialize chunker if params changed
-        if st.chunker is None or abs(float(st.chunker.chunk_sec) - float(chunk_sec)) > 1e-6 or abs(
+        # Be tolerant to minor float jitter from UI sliders (can otherwise reset buffering).
+        if st.chunker is None or abs(float(st.chunker.chunk_sec) - float(chunk_sec)) > 1e-3 or abs(
             float(st.chunker.hop_sec) - float(hop_sec)
-        ) > 1e-6:
+        ) > 1e-3:
             st.chunker = AudioStreamChunker(sr=int(pred.target_sr), chunk_sec=float(chunk_sec), hop_sec=float(hop_sec))
             st.last_input_len = None
             st.times = []
@@ -487,7 +551,11 @@ def _rt_step_safe(
             img = _render_proba_lines(st.times, st.probas, st.classes, max_lines=int(lines_k))
             status = "Waiting for audio…"
             if debug:
-                status += f"\n\n`debug`: audio=None pending={len(st.pending)} buffered={float(st.chunker.buffered_sec) if st.chunker else 0.0:.2f}s"
+                status += (
+                    f"\n\n`debug`: session={st.session_id} audio=None pending={len(st.pending)} "
+                    f"buffered={float(st.chunker.buffered_sec) if st.chunker else 0.0:.2f}s"
+                )
+            _rt_put_state(st)
             yield st, status, _df_value(["rank", "cluster_id", "conf", "cluster_labels"], [[1, "-", 0.0, "-"]]), img
             return
 
@@ -497,7 +565,8 @@ def _rt_step_safe(
             img = _render_proba_lines(st.times, st.probas, st.classes, max_lines=int(lines_k))
             status = "Waiting for audio…"
             if debug:
-                status += f"\n\n`debug`: sr={sr_in} y.size=0 pending={len(st.pending)}"
+                status += f"\n\n`debug`: session={st.session_id} sr={sr_in} y.size=0 pending={len(st.pending)}"
+            _rt_put_state(st)
             yield st, status, _df_value(["rank", "cluster_id", "conf", "cluster_labels"], [[1, "-", 0.0, "-"]]), img
             return
 
@@ -523,7 +592,11 @@ def _rt_step_safe(
             img = _render_proba_lines(st.times, st.probas, st.classes, max_lines=int(lines_k))
             status = "Listening…"
             if debug:
-                status += f"\n\n`debug`: sr={sr_in} recv={int(y_mono.size)} delta=0 pending={len(st.pending)} buffered={float(st.chunker.buffered_sec) if st.chunker else 0.0:.2f}s"
+                status += (
+                    f"\n\n`debug`: session={st.session_id} sr={sr_in} recv={int(y_mono.size)} delta=0 "
+                    f"pending={len(st.pending)} buffered={float(st.chunker.buffered_sec) if st.chunker else 0.0:.2f}s"
+                )
+            _rt_put_state(st)
             yield st, status, _df_value(["rank", "cluster_id", "conf", "cluster_labels"], [[1, "-", 0.0, "-"]]), img
             return
 
@@ -542,9 +615,10 @@ def _rt_step_safe(
             status = f"Listening… (buffering: {buf:.2f}s / {need:.2f}s)"
             if debug:
                 status += (
-                    f"\n\n`debug`: sr={sr_in} recv={int(y_mono.size)} delta={int(y_delta.size)} "
+                    f"\n\n`debug`: session={st.session_id} sr={sr_in} recv={int(y_mono.size)} delta={int(y_delta.size)} "
                     f"delta@16k={int(y_delta_16k.size)} pending={len(st.pending)}"
                 )
+            _rt_put_state(st)
             yield st, status, _df_value(["rank", "cluster_id", "conf", "cluster_labels"], [[1, "-", 0.0, "-"]]), img
             return
 
@@ -554,10 +628,11 @@ def _rt_step_safe(
         if debug:
             buf = float(st.chunker.buffered_sec) if st.chunker is not None else 0.0
             status += (
-                f"\n\n`debug`: sr={sr_in} recv={int(y_mono.size)} delta={int(y_delta.size)} "
+                f"\n\n`debug`: session={st.session_id} sr={sr_in} recv={int(y_mono.size)} delta={int(y_delta.size)} "
                 f"pending={len(st.pending)} buffered={buf:.2f}s"
             )
         img = _render_proba_lines(st.times, st.probas, st.classes, max_lines=int(lines_k))
+        _rt_put_state(st)
         yield st, status, _df_value(["rank", "cluster_id", "conf", "cluster_labels"], [[1, "-", 0.0, "-"]]), img
 
         # Do inference for one chunk and yield final update.
@@ -598,15 +673,17 @@ def _rt_step_safe(
         if debug:
             buf = float(st.chunker.buffered_sec) if st.chunker is not None else 0.0
             status += (
-                f"\n\n`debug`: sr={sr_in} recv={int(y_mono.size)} delta={int(y_delta.size)} "
+                f"\n\n`debug`: session={st.session_id} sr={sr_in} recv={int(y_mono.size)} delta={int(y_delta.size)} "
                 f"buffered={buf:.2f}s points={len(st.times)}"
             )
         img = _render_proba_lines(st.times, st.probas, st.classes, max_lines=int(lines_k))
+        _rt_put_state(st)
         yield st, status, _df_value(["rank", "cluster_id", "conf", "cluster_labels"], top_rows), img
     except Exception:
         st = state if state is not None else RealtimeState()
         status = "```text\n" + traceback.format_exc() + "\n```"
         img = _render_proba_lines(st.times, st.probas, st.classes, max_lines=int(lines_k) if lines_k else 6)
+        _rt_put_state(st)
         yield st, status, _df_value(["rank", "cluster_id", "conf", "cluster_labels"], []), img
 
 
@@ -772,6 +849,36 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
             except Exception:
                 return "```text\n" + traceback.format_exc() + "\n```"
 
+        def _rt_reset_wrapped(cfg_path: str, chunk_sec: float, hop_sec: float, request: GradioRequest):
+            return _rt_reset(cfg_path, chunk_sec, hop_sec, request=request)
+
+        def _rt_step_wrapped(
+            audio: Any,
+            cfg_path: str,
+            state: RealtimeState,
+            chunk_sec: float,
+            hop_sec: float,
+            top_k: int,
+            lines_k: int,
+            max_points: int,
+            ema_alpha: float,
+            debug: bool,
+            request: GradioRequest,
+        ):
+            yield from _rt_step_safe(
+                audio,
+                cfg_path,
+                state,
+                chunk_sec,
+                hop_sec,
+                top_k,
+                lines_k,
+                max_points,
+                ema_alpha,
+                debug,
+                request=request,
+            )
+
         pred_btn.click(
             fn=_predict_one_safe,
             inputs=[config_path, audio_in, topk, show_timeline],
@@ -780,10 +887,12 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
         )
         warmup_btn.click(fn=_warmup, inputs=[config_path], outputs=[pred_md], time_limit=1800)
 
-        rt_reset_btn.click(fn=_rt_reset, inputs=[config_path, rt_chunk, rt_hop], outputs=[rt_state, rt_status, rt_table, rt_chart])
+        rt_reset_btn.click(
+            fn=_rt_reset_wrapped, inputs=[config_path, rt_chunk, rt_hop], outputs=[rt_state, rt_status, rt_table, rt_chart]
+        )
         rt_warmup_btn.click(fn=_warmup, inputs=[config_path], outputs=[rt_status], time_limit=1800)
         rt_audio.stream(
-            fn=_rt_step_safe,
+            fn=_rt_step_wrapped,
             inputs=[rt_audio, config_path, rt_state, rt_chunk, rt_hop, rt_topk, rt_lines, rt_points, rt_ema, rt_debug],
             outputs=[rt_state, rt_status, rt_table, rt_chart],
             stream_every=0.8,
@@ -794,7 +903,7 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
         demo.load(fn=_do_reload, inputs=[config_path], outputs=[overview, metrics, cluster_md, conf_pair, figs, warn])
         demo.load(fn=_set_conf_table, inputs=[conf_pair], outputs=[conf_table])
         demo.load(fn=_do_qc, inputs=[config_path, qc_limit, kept_only], outputs=[qc_table])
-        demo.load(fn=_rt_reset, inputs=[config_path, rt_chunk, rt_hop], outputs=[rt_state, rt_status, rt_table, rt_chart])
+        demo.load(fn=_rt_reset_wrapped, inputs=[config_path, rt_chunk, rt_hop], outputs=[rt_state, rt_status, rt_table, rt_chart])
 
     queue_sig = inspect.signature(demo.queue)
     if "concurrency_count" in queue_sig.parameters:

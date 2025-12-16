@@ -1,16 +1,13 @@
-.PHONY: smoke preprocess embed split coarsen train eval report ui clean venv deps ffmpeg
+.PHONY: smoke preprocess embed split coarsen train eval report ui clean deps ffmpeg
 
 CONFIG ?= configs/smoke.json
 RUN_NAME ?= $(shell python3 -c "import json;print(json.load(open('$(CONFIG)','r',encoding='utf-8'))['run_name'])")
-PY ?= .venv/bin/python
+PY ?= python3
 
 export TMPDIR := $(CURDIR)/.cache/tmp
 export PATH := $(CURDIR)/.cache/ffmpeg/bin:$(PATH)
 
-venv:
-	@test -x "$(PY)" || python3 -m venv .venv
-
-deps: venv
+deps:
 	@mkdir -p "$(TMPDIR)" .cache/modelscope
 	@$(PY) -m pip install -U pip
 	@$(PY) -m pip install -r requirements.txt
