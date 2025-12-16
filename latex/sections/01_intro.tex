@@ -1,0 +1,35 @@
+\section{Introduction}
+
+Dialect identification is a practical prerequisite for many speech applications, including dialect-aware ASR, regionalized TTS, and linguistic analysis of large audio collections.
+In real-world crowdsourced data, however, province-level labels are often \emph{highly imbalanced} and some labels have too few speakers to support a strict speaker-disjoint evaluation split.
+This repository takes a \emph{data-centric} approach: instead of training an end-to-end neural network from scratch, we focus on robust preprocessing, strong frozen speech representations, careful splitting, and transparent reporting artifacts.
+
+\subsection{What This Repo Implements}
+
+DialectSense implements the following end-to-end pipeline (also summarized in \autoref{fig:overview}):
+\begin{enumerate}
+    \item \textbf{Audio QC + preprocessing} (robust decode, silence trimming, RMS normalization).
+    \item \textbf{WavLM-Large embeddings} as utterance-level representations.
+    \item \textbf{Speaker-disjoint split} by \texttt{uploader\_id} (train/val/test).
+    \item \textbf{Train-only label coarsening} into $K{=}12$ coarse clusters (KMeans on label centroids).
+    \item \textbf{Coarse classifier training} and \textbf{evaluation} with standard metrics and visualizations.
+    \item \textbf{Reporting + UI demo}: a Gradio UI with real-time chunk inference and confidence curves.
+\end{enumerate}
+
+\begin{figure}[hbt!]
+    \centering
+    \includegraphics[width=\linewidth]{figure/dialectsense_framework.jpg}
+    \caption{DialectSense end-to-end pipeline implemented in this repository: preprocess $\rightarrow$ embed $\rightarrow$ split $\rightarrow$ coarsen $\rightarrow$ train $\rightarrow$ eval/report $\rightarrow$ UI.}
+    \label{fig:overview}
+\end{figure}
+
+\subsection{Contributions and Document Roadmap}
+
+This report is written in an academic-paper style while remaining faithful to the repository artifacts. The main contributions are:
+\begin{itemize}
+    \item \textbf{End-to-end, reproducible pipeline:} each stage is scriptable and produces explicit artifacts under \texttt{artifacts/<run\_name>/}.
+    \item \textbf{Three-run comparison:} v1--v3 are compared using stored metrics and figures under \texttt{latex/artifacts/}.
+    \item \textbf{Operational demo:} a Web UI supports streaming inference and visualization for a deliverable showcase.
+\end{itemize}
+
+The rest of this paper is organized as: related work (\S\ref{sec:related}), method (\S\ref{sec:method}), implementation (\S\ref{sec:implementation}), dataset (\S\ref{sec:dataset}), experiments (\S\ref{sec:experiments}), results (\S\ref{sec:results}), discussion (\S\ref{sec:discussion}), and conclusion (\S\ref{sec:conclusion}).

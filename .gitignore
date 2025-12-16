@@ -10,4 +10,17 @@ __pycache__/
 web/
 artifacts.zip
 dialect_sense_datasets.zip
-latex/
+latex.zip
+
+# Track LaTeX sources; ignore build outputs.
+latex/build/
+latex/*.pdf
+latex/*.log
+latex/*.aux
+latex/*.out
+latex/*.toc
+latex/*.bbl
+latex/*.blg
+latex/*.fls
+latex/*.fdb_latexmk
+latex/*.synctex.gz

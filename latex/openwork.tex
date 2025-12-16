@@ -1,0 +1,54 @@
+\documentclass[12pt]{article}
+\usepackage{openwork}
+
+\title{DialectSense: A Data-Centric WavLM Embedding Pipeline for Coarse Dialect Identification}
+\author[1]{Author One}
+\affil[1]{Affiliation One}
+\author[2]{Author Two}
+\affil[2]{Affiliation Two}
+\date{}
+
+% Convenience macros for the curated three-run artifact snapshots under latex/artifacts/.
+\newcommand{\RunOne}{v1}
+\newcommand{\RunTwo}{v2}
+\newcommand{\RunThree}{v3}
+\newcommand{\runfig}[2]{artifacts/#1/figures/#2}
+\newcommand{\runfile}[2]{\nolinkurl{artifacts/#1/#2}}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+\emph{DialectSense} is an end-to-end, reproducible dialect identification system built as a data-centric pipeline: audio quality control (QC) and preprocessing, WavLM-Large utterance embeddings, speaker-disjoint train/val/test splits, train-only label coarsening into coarse clusters, and supervised coarse-label classification.
+The goal is robust \emph{coarse} dialect identification on a crowdsourced dataset where fine-grained province labels are imbalanced and some labels have too few speakers for a strict speaker-disjoint split.
+
+Using the Xiangyin dialect corpus, our preprocessing stage reads 27{,}146 metadata rows, drops 49 rows missing province labels, and retains 20{,}800 clips after silence trimming and a minimum effective duration constraint.
+We then prune labels that cannot satisfy the speaker-disjoint split constraints and train/evaluate on 27 province labels grouped into $K{=}12$ coarse clusters.
+Across three experiment runs on a fixed 1{,}777-clip test set -- (v1) default MLP classifier, (v2) tuned LinearSVC, and (v3) stacked SVM+MLP with a meta LogisticRegression -- the best run reaches 0.408 accuracy and 0.230 macro-F1 on coarse cluster prediction.
+
+Beyond offline evaluation, the repository provides a Makefile-driven pipeline and a Gradio Web UI for real-time chunk-level inference with per-cluster confidence curves, supporting a clean deliverable showcase and reproducible experimentation.
+\par\smallskip
+\noindent\textbf{Keywords:} dialect identification, WavLM, speaker-disjoint split, label coarsening, stacked classifier, reproducibility, real-time demo
+\end{abstract}
+
+\input{sections/01_intro}
+\input{sections/02_related_work}
+\input{sections/03_method}
+\input{sections/04_implementation}
+\input{sections/05_dataset}
+\input{sections/06_experiments}
+\input{sections/07_results}
+\input{sections/06_discussion}
+\input{sections/08_conclusion}
+
+\appendix
+\input{sections/A_appendix}
+
+\section*{Acknowledgments}
+TODO: Add team acknowledgments / course info if required by the deliverable template.
+
+\clearpage
+\input{sections/09_references}
+
+\end{document}

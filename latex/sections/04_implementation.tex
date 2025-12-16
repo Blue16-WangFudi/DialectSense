@@ -1,0 +1,73 @@
+\section{Implementation}
+\label{sec:implementation}
+
+\subsection{Repository Structure}
+
+The codebase is organized around a pipeline-first design:
+\begin{itemize}
+    \item \texttt{dialectsense/}: core library implementing all pipeline stages and the Web UI.
+    \item \texttt{configs/}: JSON configuration files (smoke and full settings).
+    \item \texttt{datasets/}: dataset snapshot (metadata and audio files).
+    \item \texttt{artifacts/}: generated outputs, one folder per \texttt{run\_name}.
+\end{itemize}
+
+\subsection{Entrypoints}
+
+The recommended interface is the Makefile:
+\begin{lstlisting}
+make smoke
+make preprocess embed split coarsen train eval report CONFIG=configs/full.json
+make ui CONFIG=configs/full.json
+\end{lstlisting}
+
+Each stage is also exposed as a CLI subcommand:
+\begin{lstlisting}
+python3 -m dialectsense.cli preprocess --config configs/full.json
+python3 -m dialectsense.cli embed      --config configs/full.json
+python3 -m dialectsense.cli split      --config configs/full.json
+python3 -m dialectsense.cli coarsen    --config configs/full.json
+python3 -m dialectsense.cli train      --config configs/full.json
+python3 -m dialectsense.cli eval       --config configs/full.json
+python3 -m dialectsense.cli report     --config configs/full.json
+python3 -m dialectsense.cli ui         --config configs/full.json
+\end{lstlisting}
+
+\subsection{Configuration and Reproducibility}
+
+All behavior is controlled by a JSON config file. Key fields include:
+\begin{itemize}
+    \item \texttt{data.*}: paths, inclusion filters, and subsampling.
+    \item \texttt{audio.*}: preprocessing, QC rules, and duration thresholds.
+    \item \texttt{embed.*}: WavLM settings and embedding chunking.
+    \item \texttt{split.*}: speaker-disjoint split constraints and random seeds.
+    \item \texttt{coarse.*}: KMeans settings for train-only label coarsening.
+    \item \texttt{model.*}: coarse classifier family and hyperparameters.
+\end{itemize}
+
+For reproducibility, each run writes a resolved configuration snapshot to
+\nolinkurl{artifacts/<run_name>/config.resolved.json}.
+
+\subsection{Artifacts Produced by Each Stage}
+
+The pipeline produces a complete set of machine-readable outputs and figures:
+\begin{itemize}
+    \item \texttt{audio\_qc.csv}: per-clip preprocessing outcomes and QC decisions.
+    \item \texttt{splits.csv}: speaker-disjoint train/val/test splits.
+    \item \texttt{label\_to\_cluster.json}, \texttt{cluster\_summary.md}: coarse mapping (train-only).
+    \item \texttt{models/coarse\_model.joblib}: trained classifier bundle.
+    \item \texttt{report\_coarse.json}, \texttt{top\_confusions.csv}: evaluation metrics and dominant errors.
+    \item \texttt{figures/*.png}: diagnostics for QC, embeddings, and performance.
+\end{itemize}
+
+\subsection{Web UI (Streaming Inference)}
+
+The Web UI provides a real-time demo mode:
+\begin{itemize}
+    \item microphone audio is streamed into a fixed-length chunker;
+    \item each chunk is embedded with WavLM and classified into coarse clusters;
+    \item the UI visualizes per-cluster confidence curves over time.
+\end{itemize}
+
+TODO: Add a screenshot file for the UI (for example, \texttt{latex/figure/ui\_realtime.png}) and include it as a figure.
+
+\FloatBarrier

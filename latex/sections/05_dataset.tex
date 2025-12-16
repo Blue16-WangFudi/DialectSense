@@ -1,0 +1,110 @@
+\section{Dataset}
+\label{sec:dataset}
+
+\subsection{Source, Files, and License}
+
+The project is built around a locally stored snapshot of the Xiangyin dataset.
+Relevant files in this repository are:
+\begin{itemize}
+    \item \texttt{datasets/metadata.csv}: metadata table (clip id, label, uploader id, and other fields).
+    \item \texttt{datasets/oggs/}: audio files named as \texttt{<id>.ogg}.
+    \item \texttt{datasets/LICENSE}: CC BY-NC-SA 4.0 license text.
+\end{itemize}
+
+\subsection{Task Definition}
+
+Each example is an audio clip with a province-level label stored in the metadata column \texttt{dialect.province}.
+We evaluate \textbf{coarse dialect identification}: original province labels are mapped into $K{=}12$ coarse clusters computed from training data only, and the classifier predicts the cluster id in $\{0,\dots,11\}$.
+
+\subsection{Evidence-Backed Data Accounting}
+
+Table~\ref{tab:data_summary} reports the exact counts used in our experiments, taken from the stored pipeline stats of v3.
+
+\begin{table*}[t]
+    \centering
+    \small
+    \begin{tblr}{
+        width=\linewidth,
+        colspec={X[l] Q[r] X[l]},
+        row{1}={font=\bfseries},
+    }
+        Stage & Count & Evidence (file and key) \\
+        \toprule
+        Metadata rows & 27{,}146 & \runfile{\RunThree}{preprocess_stats.json}\linebreak\nolinkurl{read.n_metadata_rows} \\
+        Missing province labels & 49 & \runfile{\RunThree}{preprocess_stats.json}\linebreak\nolinkurl{read.n_missing_label} \\
+        Labeled clips considered & 27{,}097 & \runfile{\RunThree}{preprocess_stats.json}\linebreak\nolinkurl{votes_filter.n_in} \\
+        Kept after audio QC & 20{,}800 & \runfile{\RunThree}{preprocess_stats.json}\linebreak\nolinkurl{audio_qc.n_kept} \\
+        Dropped after trim (too short) & 6{,}297 & \runfile{\RunThree}{preprocess_stats.json}\linebreak\nolinkurl{audio_qc.drop_reasons} \\
+        Kept labels after QC & 89 & \runfile{\RunThree}{split_stats.json}\linebreak\nolinkurl{prune_impossible_for_split.n_labels_in} \\
+        Labels after split-feasibility pruning & 32 & \runfile{\RunThree}{split_stats.json}\linebreak\nolinkurl{prune_impossible_for_split.n_labels_out} \\
+        Final labels used (province-level) & 27 & \runfile{\RunThree}{split_stats.json}\linebreak\nolinkurl{split.counts.*} \\
+        Final clips used (train+val+test) & 20{,}079 & \runfile{\RunThree}{split_stats.json}\linebreak\nolinkurl{split.counts.*} \\
+        \bottomrule
+    \end{tblr}
+    \caption{Dataset accounting for the v3 pipeline (all values are read from stored stats files).}
+    \label{tab:data_summary}
+\end{table*}
+
+\subsection{Audio QC and Preprocessing}
+
+Audio preprocessing is deterministic and conservative:
+\begin{itemize}
+    \item robust decoding and silence trimming via \texttt{ffmpeg} \texttt{silenceremove};
+    \item resampling to 16~kHz mono;
+    \item RMS normalization to \(-20\) dBFS with peak limiting (enabled by default);
+    \item dropping clips whose effective duration after trimming is below 1.0 seconds.
+\end{itemize}
+
+\begin{figure}[t]
+    \centering
+    \begin{subfigure}{0.49\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{\runfig{\RunThree}{dropped_reasons.png}}
+        \caption{Drop reasons}
+    \end{subfigure}\hfill
+    \begin{subfigure}{0.49\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{\runfig{\RunThree}{effective_duration_hist_kept.png}}
+        \caption{Kept duration histogram}
+    \end{subfigure}
+    \caption{Audio QC outcomes for v3.}
+    \label{fig:qc}
+\end{figure}
+
+\subsection{Splits and Speaker Disjointness}
+
+The pipeline constructs speaker-disjoint train/val/test splits using the uploader identifier \texttt{uploader\_id}.
+The v1--v3 comparisons share the same split file \runfile{\RunThree}{splits.csv}. Table~\ref{tab:splits} summarizes its sizes.
+
+\begin{table}[t]
+    \centering
+    \small
+    \begin{tblr}{colspec={l Q[r] Q[r]}, row{1}={font=\bfseries}}
+        Split & Clips & Speakers \\
+        \toprule
+        Train & 16{,}258 & 5{,}261 \\
+        Val & 2{,}044 & 658 \\
+        Test & 1{,}777 & 658 \\
+        \bottomrule
+    \end{tblr}
+    \caption{Speaker-disjoint split statistics computed from \runfile{\RunThree}{splits.csv}.}
+    \label{tab:splits}
+\end{table}
+
+\begin{figure}[t]
+    \centering
+    \begin{subfigure}{0.49\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{\runfig{\RunThree}{cluster_counts.png}}
+        \caption{Coarse cluster counts}
+    \end{subfigure}\hfill
+    \begin{subfigure}{0.49\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{\runfig{\RunThree}{speakers_per_split.png}}
+        \caption{Speakers per split}
+    \end{subfigure}
+    \caption{Distribution diagnostics exported by the pipeline for v3.}
+    \label{fig:data_dist}
+\end{figure}
+
+\FloatBarrier

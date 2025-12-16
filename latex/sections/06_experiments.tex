@@ -1,0 +1,52 @@
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Evaluation Protocol}
+
+All runs follow the same protocol:
+\begin{itemize}
+    \item perform audio QC and preprocessing;
+    \item extract utterance embeddings using WavLM-Large;
+    \item create speaker-disjoint train/val/test splits using \texttt{uploader\_id};
+    \item compute a train-only coarse mapping into $K{=}12$ clusters;
+    \item train a coarse classifier on the training split (with optional tuning);
+    \item evaluate on the fixed test split.
+\end{itemize}
+
+The three-run comparison uses the same test set size, \(n_{test} = 1777\), as stored in each run report.
+
+\subsection{Metrics}
+
+We report:
+\begin{itemize}
+    \item \textbf{Accuracy} on coarse cluster prediction.
+    \item \textbf{Macro-F1} across clusters (equal weight per cluster).
+\end{itemize}
+Per-cluster precision/recall/F1 and confusion matrices are included as diagnostics.
+
+\subsection{Three Runs}
+
+Each run is backed by a resolved config snapshot under \texttt{latex/artifacts/}.
+Table~\ref{tab:run_defs} summarizes the key classifier differences.
+
+\begin{table}[t]
+    \centering
+    \small
+    \begin{tblr}{
+        width=\linewidth,
+        colspec={l X[l]},
+        row{1}={font=\bfseries},
+    }
+        Run & Definition (evidence) \\
+        \toprule
+        v1 & Baseline configuration; see \runfile{\RunOne}{config.resolved.json}. \\
+        v2 & LinearSVC tuned for validation accuracy; see \runfile{\RunTwo}{config.resolved.json}. \\
+        v3 & Stacked classifier (SVM + MLP, meta LogisticRegression); see \runfile{\RunThree}{config.resolved.json}. \\
+        \bottomrule
+    \end{tblr}
+    \caption{Three experiment runs compared in this paper.}
+    \label{tab:run_defs}
+\end{table}
+
+\FloatBarrier
+

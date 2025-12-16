@@ -1,0 +1,83 @@
+\section{Method: Pipeline and System Design}
+\label{sec:method}
+
+DialectSense is organized as a sequence of deterministic pipeline stages, each producing explicit artifacts under \texttt{artifacts/<run\_name>/} (or the curated snapshots under \texttt{latex/artifacts/} used in this document).
+This section describes the core method components and how they are implemented in the repository.
+
+\subsection{Speech Representation: WavLM-Large Utterance Embeddings}
+
+We use WavLM-Large as a frozen feature extractor.
+Each preprocessed waveform is mapped to an utterance embedding by:
+\begin{enumerate}
+    \item computing hidden states with \texttt{output\_hidden\_states=True},
+    \item averaging a mid-layer range (default: layers 6--12),
+    \item mean-pooling over time to obtain a fixed-dimensional vector, and
+    \item L2-normalizing the final embedding.
+\end{enumerate}
+
+Long utterances are handled by chunked embedding:
+the audio is split into overlapping windows (default: 3.0~s chunks with 1.5~s hop, capped by \texttt{embed.chunk.max\_sec} and \texttt{embed.chunk.max\_chunks}), embedded per chunk, and aggregated (default: mean).
+
+\subsection{Speaker-Disjoint Splitting with Label Constraints}
+
+To avoid speaker leakage, splits are constructed by grouping on \texttt{uploader\_id}.
+Because crowd data contains many low-frequency labels, the pipeline first prunes labels that cannot satisfy minimum sample and minimum speaker counts per split, then retries group splitting; if a feasible split still cannot be found, it iteratively drops the rarest remaining label until the constraints are satisfied.
+The exact resulting split used in v1--v3 is stored in \runfile{\RunThree}{splits.csv}.
+
+\subsection{Train-Only Coarse Label Mapping}
+
+Rather than predicting dozens of imbalanced fine labels directly, DialectSense evaluates a \emph{coarse} classification task:
+original province labels are mapped into $K{=}12$ clusters computed \emph{only from the training split} to avoid leakage.
+
+The coarsening algorithm is:
+\begin{enumerate}
+    \item For each original label \(y\), compute a \emph{label centroid} embedding \(\mu_y\) by averaging the embeddings of training samples with label \(y\) (optionally with trimmed/weighted variants).
+    \item L2-normalize each \(\mu_y\).
+    \item Run KMeans with \(K{=}12\) on the set of label centroids \(\{\mu_y\}\).
+    \item Assign every sample with label \(y\) to its cluster \(\mathrm{cluster}(y)\).
+\end{enumerate}
+
+Figure~\ref{fig:cluster_structure} visualizes the coarse cluster geometry (centroid cosine distances) and the 2D projection of label centroids.
+
+\begin{figure}[hbt!]
+    \centering
+    \begin{tblr}{colsep=2pt, colspec={cc}}
+        \includegraphics[width=0.475\linewidth]{\runfig{\RunThree}{cluster_centroid_cosine_distance.png}} &
+        \includegraphics[width=0.475\linewidth]{\runfig{\RunThree}{label_centroids_2d.png}} \\
+    \end{tblr}
+    \caption{Coarse cluster structure for v3: cosine distances between cluster centroids (left) and a 2D projection of label centroids colored by coarse cluster (right).}
+    \label{fig:cluster_structure}
+\end{figure}
+
+\subsection{Embedding Space Visualization}
+
+To make representation quality and cluster overlap visible, the pipeline also exports 2D projections (UMAP if available, else t-SNE) of train and test embeddings colored by coarse cluster:
+
+\begin{figure}[hbt!]
+    \centering
+    \begin{tblr}{colsep=2pt, colspec={cc}}
+        \includegraphics[width=0.475\linewidth]{\runfig{\RunThree}{embedding_2d_train.png}} &
+        \includegraphics[width=0.475\linewidth]{\runfig{\RunThree}{embedding_2d_test.png}} \\
+    \end{tblr}
+    \caption{Train/test embedding projections for v3 (colored by coarse cluster). These plots help diagnose overlap between clusters and potential sources of confusion.}
+    \label{fig:emb2d}
+\end{figure}
+
+\subsection{Coarse Classifiers}
+
+Given an utterance embedding \(x \in \mathbb{R}^d\), the coarse classifier outputs a cluster probability vector \(p(\cdot \mid x)\).
+This repository supports several \texttt{scikit-learn} classifier families through configuration, including:
+\begin{itemize}
+    \item MLP (baseline),
+    \item LinearSVC / LogisticRegression (fast linear baselines),
+    \item Prototype-based cosine classifiers, and
+    \item A stacked classifier (SVM + MLP $\rightarrow$ meta LogisticRegression) for improved accuracy.
+\end{itemize}
+The experiment section (\S\ref{sec:experiments}) compares the three concrete runs v1--v3 using stored metrics.
+
+\subsection{Reporting and Artifacts}
+
+Each run writes machine-readable metrics (\texttt{report\_coarse.json}) plus visual artifacts under \texttt{figures/} (confusion matrix, F1 by cluster, top confusion pairs, duration histograms, and 2D projections).
+These artifacts are used directly in this document to avoid retyping and to keep the report evidence-driven.
+
+\FloatBarrier

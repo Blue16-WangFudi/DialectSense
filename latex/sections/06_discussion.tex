@@ -1,0 +1,34 @@
+\section{Discussion, Limitations, and Future Work}
+\label{sec:discussion}
+
+\subsection{What the Results Suggest}
+
+\textbf{Accuracy vs. macro-F1 trade-off.}
+Across the three runs, v3 improves accuracy over v1, while v2 achieves the best macro-F1 (Table~\ref{tab:main_results}).
+Because macro-F1 weights each cluster equally, it is more sensitive to small-support clusters (see Appendix \ref{sec:appendix} for cluster supports and per-cluster F1).
+
+\textbf{Dominant confusions concentrate in a few cluster pairs.}
+The top confusion pairs for v3 (Figure~\ref{fig:perf_v3} and \runfile{\RunThree}{top_confusions.csv}) show repeated errors such as \(4 \rightarrow 11\), \(4 \rightarrow 0\), and \(2 \rightarrow 11\).
+Interpreting these errors requires mapping clusters back to their province sets (Table~\ref{tab:cluster_map}), which reveals that some confusions occur between geographically/linguistically adjacent province groups (e.g., clusters containing provinces in Central/Eastern China).
+
+\textbf{Some clusters remain unresolved.}
+In v3, several clusters have F1=0 (Appendix Table~\ref{tab:per_cluster_metrics_v3}), indicating either severe overlap in the embedding space or insufficient training signal for those clusters under the current imbalance.
+
+\subsection{Threats to Validity}
+
+\begin{itemize}
+    \item \textbf{Label noise and heterogeneous label space.} The upstream dataset includes many labels beyond mainland provinces (e.g., foreign regions or city-level labels). The pipeline prunes labels to satisfy split constraints, which changes the effective label set (Table~\ref{tab:data_summary}).
+    \item \textbf{Imbalance.} Cluster sizes vary widely (Figure~\ref{fig:data_dist} and Table~\ref{tab:cluster_map}), and the test supports for minority clusters can be small, amplifying variance in per-cluster metrics.
+    \item \textbf{Frozen representation.} WavLM embeddings are used without end-to-end fine-tuning; this improves engineering simplicity but may cap performance.
+\end{itemize}
+
+\subsection{Future Work (Grounded in Current Implementation)}
+
+The current codebase already provides several levers for systematic improvement:
+\begin{itemize}
+    \item \textbf{Improve coarsening robustness:} \texttt{coarse.centroid.method} supports alternatives (e.g., trimmed mean or QC-weighted mean) that may reduce centroid noise for small labels.
+    \item \textbf{Expand tuning beyond linear models:} v2 demonstrates val-driven tuning for accuracy; extending this to stacked components and regularization may improve both accuracy and macro-F1.
+    \item \textbf{Better imbalance handling:} add explicit reweighting or resampling strategies at the classifier level, and report calibrated probabilities for UI confidence curves.
+    \item \textbf{Add run-time provenance:} export per-stage timing and hardware metadata (TODO) to support reproducibility claims about speed/cost.
+\end{itemize}
+

@@ -1,0 +1,4 @@
+{
+  "embedding_2d_method": "umap",
+  "figures_dir": "artifacts/full/figures"
+}

@@ -86,3 +86,13 @@ Each stage is runnable independently (and reuses cached artifacts when present):
 ```
 
 See `DESIGN.md` for the pipeline rationale and configuration keys.
+
+## Paper (LaTeX)
+
+To compile `latex/openwork.tex`, run:
+
+```powershell
+.\build-openwork.ps1
+```
+
+The PDF will be written to `latex/build/openwork.pdf`.

@@ -1,0 +1,16 @@
+\section{Conclusion}
+\label{sec:conclusion}
+
+This paper presented an evidence-driven dialect identification pipeline centered on robust data processing and frozen speech representations.
+DialectSense combines audio QC, WavLM-Large embeddings, speaker-disjoint splitting, train-only label coarsening, and configurable coarse classifiers into a reproducible workflow.
+Using stored artifacts from three runs (v1--v3), we reported coarse-cluster performance on a fixed test set and provided visual diagnostics suitable for a clean deliverable showcase.
+
+\subsection{Future Work}
+
+Immediate next steps are:
+\begin{itemize}
+    \item export run-time and hardware metadata to support stronger reproducibility claims;
+    \item add a UI screenshot figure to the paper;
+    \item systematically tune coarsening and classifier settings to improve both accuracy and macro-F1 under imbalance.
+\end{itemize}
+

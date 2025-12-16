@@ -1,0 +1,104 @@
+{
+  "audio": {
+    "min_sec": 1.0,
+    "normalize": {
+      "enabled": true,
+      "max_gain_db": 20.0,
+      "peak_limit": 0.99,
+      "target_rms_dbfs": -20.0
+    },
+    "target_sr": 16000,
+    "trim_silence": {
+      "enabled": true,
+      "min_silence_sec": 0.2,
+      "threshold_db": -40.0
+    }
+  },
+  "coarse": {
+    "centroid": {
+      "method": "mean",
+      "trim_fraction": 0.1
+    },
+    "enabled": true,
+    "k": 12,
+    "kmeans": {
+      "n_init": 30
+    }
+  },
+  "data": {
+    "audio_dir": "datasets/oggs",
+    "id_col": "id",
+    "label_col": "dialect.province",
+    "max_per_label": null,
+    "max_total": null,
+    "metadata_csv": "datasets/metadata.csv",
+    "min_votes": null,
+    "top_k_labels": null,
+    "uploader_col": "uploader_id"
+  },
+  "embed": {
+    "backend": "wavlm_large",
+    "chunk": {
+      "agg": "mean",
+      "chunk_sec": 3.0,
+      "hop_sec": 1.5,
+      "max_chunks": 40,
+      "max_sec": 12.0,
+      "strategy": "chunk"
+    },
+    "device": "auto",
+    "layer_end": 12,
+    "layer_start": 6,
+    "model_cache_dir": ".cache/modelscope",
+    "model_id": "microsoft/wavlm-large"
+  },
+  "model": {
+    "C": 1.0,
+    "calibration": {
+      "enabled": false,
+      "method": "sigmoid"
+    },
+    "class_weight": null,
+    "max_iter": 8000,
+    "svm_kind": "linear_svc",
+    "tune": {
+      "C_grid": [
+        0.1,
+        0.3,
+        1.0,
+        3.0
+      ],
+      "class_weight_grid": [
+        null
+      ],
+      "enabled": true,
+      "final_train": "train_val",
+      "max_saved": 300,
+      "objective": "val_accuracy",
+      "svm_kind_grid": [
+        "linear_svc"
+      ]
+    }
+  },
+  "report": {
+    "embedding_2d": {
+      "max_points": 20000,
+      "method": "umap_if_available_else_tsne",
+      "perplexity": 30
+    },
+    "max_labels_bar": 50
+  },
+  "run_name": "full",
+  "seed": 42,
+  "split": {
+    "max_label_drop_iterations": 500,
+    "max_tries": 250,
+    "min_groups_per_label": 3,
+    "min_per_label_test": 20,
+    "min_per_label_train": 20,
+    "min_per_label_val": 5,
+    "test_ratio": 0.1,
+    "train_ratio": 0.8,
+    "val_ratio": 0.1
+  }
+}

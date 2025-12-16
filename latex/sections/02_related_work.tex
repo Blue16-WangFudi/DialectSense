@@ -1,0 +1,8 @@
+\section{Related Work}
+\label{sec:related}
+
+Dialect identification is commonly approached with acoustic feature extraction followed by supervised classification.
+Modern systems often replace hand-crafted features with self-supervised speech representations, where a large pre-trained model serves as a general-purpose encoder and downstream tasks are solved with lightweight classifiers.
+In this project, we use WavLM-Large as a frozen encoder and focus on the engineering aspects that determine reproducibility and robustness on crowdsourced data: audio quality control, speaker-disjoint splitting, and transparent evaluation artifacts.
+
+This repository is intentionally empirical and artifact-driven. We therefore keep related work brief and do not introduce additional citations beyond the models and libraries directly used in the implementation.

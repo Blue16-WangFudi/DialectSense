@@ -1,0 +1,81 @@
+\section{Results}
+\label{sec:results}
+
+\subsection{Main Metrics}
+
+Table~\ref{tab:main_results} reports accuracy and macro-F1 on the fixed test split (\(n_{test}=1777\)).
+All values are read from the stored reports:
+\runfile{\RunOne}{report_coarse.json},
+\runfile{\RunTwo}{report_coarse.json}, and
+\runfile{\RunThree}{report_coarse.json}.
+
+\begin{table}[t]
+    \centering
+    \small
+    \begin{tblr}{
+        width=\linewidth,
+        colspec={l l Q[r] Q[r]},
+        row{1}={font=\bfseries},
+    }
+        Run & Model & Accuracy & Macro-F1 \\
+        \toprule
+        v1 & MLP baseline & 0.3911 & 0.2196 \\
+        v2 & LinearSVC (tuned) & 0.3860 & 0.2654 \\
+        v3 & Stacked (SVM + MLP + meta LR) & 0.4080 & 0.2298 \\
+        \bottomrule
+    \end{tblr}
+    \caption{Main results for coarse cluster prediction.}
+    \label{tab:main_results}
+\end{table}
+
+\subsection{Confusion Matrices}
+
+Figure~\ref{fig:cms} compares row-normalized confusion matrices across the three runs.
+To keep figures readable in a one-column layout, we show v1 and v2 side-by-side and v3 at full width.
+
+\begin{figure}[t]
+    \centering
+    \begin{subfigure}{0.49\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{\runfig{\RunOne}{confusion_matrix_coarse.png}}
+        \caption{v1: MLP}
+    \end{subfigure}\hfill
+    \begin{subfigure}{0.49\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{\runfig{\RunTwo}{confusion_matrix_coarse.png}}
+        \caption{v2: tuned LinearSVC}
+    \end{subfigure}
+
+    \vspace{6pt}
+    \begin{subfigure}{\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{\runfig{\RunThree}{confusion_matrix_coarse.png}}
+        \caption{v3: stacked classifier}
+    \end{subfigure}
+    \caption{Row-normalized confusion matrices on the same test set.}
+    \label{fig:cms}
+\end{figure}
+
+\subsection{Diagnostics: Per-Cluster F1 and Dominant Confusions}
+
+Figure~\ref{fig:perf_v3} summarizes cluster-level diagnostics for v3: per-cluster F1 and the most frequent confusion pairs by count.
+The underlying data are exported by the pipeline as \runfile{\RunThree}{report_coarse.json} and \runfile{\RunThree}{top_confusions.csv}.
+
+\begin{figure}[t]
+    \centering
+    \begin{subfigure}{0.49\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{\runfig{\RunThree}{f1_by_cluster.png}}
+        \caption{Per-cluster F1}
+    \end{subfigure}\hfill
+    \begin{subfigure}{0.49\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{\runfig{\RunThree}{top_confusions.png}}
+        \caption{Top confusion pairs}
+    \end{subfigure}
+    \caption{Diagnostics exported for v3.}
+    \label{fig:perf_v3}
+\end{figure}
+
+\FloatBarrier
+
