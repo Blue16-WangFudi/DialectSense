@@ -75,7 +75,7 @@ def ensure_coarsen(cfg: dict[str, Any], artifact_dir: Path) -> Path:
 
 def ensure_train(cfg: dict[str, Any], artifact_dir: Path) -> Path:
     ensure_coarsen(cfg, artifact_dir)
-    p = artifact_dir / "models" / "coarse_svm.joblib"
+    p = artifact_dir / "models" / "coarse_model.joblib"
     need = not p.exists()
     if not need:
         try:
@@ -97,7 +97,7 @@ def ensure_train(cfg: dict[str, Any], artifact_dir: Path) -> Path:
 def ensure_eval(cfg: dict[str, Any], artifact_dir: Path) -> Path:
     ensure_train(cfg, artifact_dir)
     p = artifact_dir / "report_coarse.json"
-    model_p = artifact_dir / "models" / "coarse_svm.joblib"
+    model_p = artifact_dir / "models" / "coarse_model.joblib"
     need = not p.exists()
     if not need and model_p.exists():
         try:

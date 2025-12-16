@@ -66,12 +66,28 @@
     }
   },
   "model": {
-    "class_weight": "balanced",
-    "C": 1.0,
-    "max_iter": 8000,
-    "calibration": {
-      "enabled": true,
-      "method": "sigmoid"
+    "kind": "stacked",
+    "stacked_svm": {
+      "C": 1.0,
+      "max_iter": 8000,
+      "class_weight": "balanced"
+    },
+    "stacked_mlp": {
+      "hidden": [
+        1024,
+        256
+      ],
+      "alpha": 0.0001,
+      "lr": 0.0008,
+      "max_iter": 140,
+      "early_stopping": true,
+      "n_iter_no_change": 10,
+      "validation_fraction": 0.1
+    },
+    "stacked_meta": {
+      "C": 2.0,
+      "max_iter": 4000,
+      "solver": "lbfgs"
     }
   },
   "report": {

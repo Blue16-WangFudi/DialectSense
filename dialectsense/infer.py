@@ -72,7 +72,7 @@ class CoarsePredictor:
     @classmethod
     def from_artifacts(cls, artifact_dir: str | Path, cfg: dict[str, Any]) -> "CoarsePredictor":
         artifact_dir = Path(artifact_dir)
-        model_path = artifact_dir / "models" / "coarse_svm.joblib"
+        model_path = artifact_dir / "models" / "coarse_model.joblib"
         if not model_path.exists():
             raise FileNotFoundError(f"Missing model: {model_path}")
 

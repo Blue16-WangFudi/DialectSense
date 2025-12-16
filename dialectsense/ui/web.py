@@ -185,7 +185,7 @@ def _load_results(config_path: str) -> tuple[str, dict[str, Any], str, tuple[lis
         f"- audio_qc.csv: {'✅' if (art/'audio_qc.csv').exists() else '❌'}",
         f"- splits.csv: {'✅' if (art/'splits.csv').exists() else '❌'}",
         f"- label_to_cluster.json: {'✅' if (art/'label_to_cluster.json').exists() else '❌'}",
-        f"- models/coarse_svm.joblib: {'✅' if (art/'models'/'coarse_svm.joblib').exists() else '❌'}",
+        f"- models/coarse_model.joblib: {'✅' if (art/'models'/'coarse_model.joblib').exists() else '❌'}",
         f"- report_coarse.json: {'✅' if (art/'report_coarse.json').exists() else '❌'}",
     ]
     overview_md = "\n".join(overview)
@@ -299,7 +299,7 @@ _PREDICTOR_CACHE: dict[str, tuple[float, CoarsePredictor]] = {}
 def _get_predictor(config_path: str) -> CoarsePredictor:
     cfg_path = str(Path(config_path))
     ctx = _load_ctx(cfg_path)
-    model_path = ctx.artifact_dir / "models" / "coarse_svm.joblib"
+    model_path = ctx.artifact_dir / "models" / "coarse_model.joblib"
     mtime = float(model_path.stat().st_mtime) if model_path.exists() else 0.0
     cached = _PREDICTOR_CACHE.get(cfg_path)
     if cached is not None and cached[0] == mtime:
@@ -477,7 +477,7 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
 
     repo = _repo_root()
     config_choices = []
-    for p in [repo / "configs" / "smoke.json", repo / "configs" / "full.json", repo / "configs" / "full_accuracy.json"]:
+    for p in [repo / "configs" / "smoke.json", repo / "configs" / "full.json"]:
         if p.exists():
             config_choices.append(str(p))
     if str(Path(default_config_path)) not in config_choices and Path(default_config_path).exists():

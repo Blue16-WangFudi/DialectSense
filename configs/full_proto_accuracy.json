@@ -66,16 +66,13 @@
     }
   },
   "model": {
-    "kind": "mlp",
+    "kind": "proto_cosine",
+    "scale": false,
+    "proto_k": 6,
+    "proto_reduce": "max",
+    "proto_n_init": 10,
     "class_weight": null,
-    "mlp_hidden": [
-      768,
-      256
-    ],
-    "mlp_alpha": 0.0003,
-    "mlp_lr": 0.001,
-    "mlp_max_iter": 80,
-    "mlp_early_stopping": true,
+    "final_train": "train_val",
     "calibration": {
       "enabled": false
     },
@@ -84,39 +81,16 @@
       "objective": "val_accuracy",
       "final_train": "train_val",
       "kind_grid": [
-        "mlp",
-        "logreg",
-        "linear_svc"
+        "proto_cosine"
       ],
-      "class_weight_grid": [
-        null
+      "proto_k_grid": [
+        2,
+        4,
+        6,
+        8,
+        10
       ],
-      "mlp_hidden_grid": [
-        [
-          512,
-          128
-        ],
-        [
-          768,
-          256
-        ]
-      ],
-      "mlp_alpha_grid": [
-        0.0001,
-        0.0003
-      ],
-      "logreg_C_grid": [
-        0.5,
-        1.0,
-        2.0,
-        4.0
-      ],
-      "C_grid": [
-        0.3,
-        1.0,
-        3.0
-      ],
-      "max_saved": 300
+      "max_saved": 50
     }
   },
   "report": {
@@ -128,3 +102,4 @@
     }
   }
 }
+

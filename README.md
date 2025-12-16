@@ -7,7 +7,7 @@ Audio QC + preprocessing
  → WavLM-Large embeddings (chunked aggregation)
  → speaker-disjoint split (by uploader_id)
  → label coarsening (train-only label-centroid KMeans)
- → coarse-label training (StandardScaler + Linear SVM + calibration)
+ → coarse-label training (stacked: Linear SVM + MLP → meta LogisticRegression)
  → evaluation + visualizations + report artifacts
 ```
 
@@ -51,10 +51,10 @@ make smoke CONFIG=configs/smoke.json
 make preprocess embed split coarsen train eval report CONFIG=configs/full.json
 ```
 
-若目标是尽可能提高 Accuracy，可使用 `configs/full_accuracy.json`（以验证集 Accuracy 为目标做超参搜索并在 train+val 上重训）：
+`configs/full.json` 默认使用 stacked coarse classifier（SVM+MLP→meta LR），用于提高 Accuracy；如只想重训模型与评测：
 
 ```bash
-make train eval report CONFIG=configs/full_accuracy.json
+make train eval report CONFIG=configs/full.json
 ```
 
 If your environment does not have `make` (common on Windows), follow `RUN_WINDOWS.md` and run the Python CLI commands instead.
@@ -66,6 +66,7 @@ After `make smoke`, look at:
 - `artifacts/smoke/audio_qc.csv` (per-clip preprocessing/QC decisions)
 - `artifacts/smoke/splits.csv` (speaker-disjoint train/val/test)
 - `artifacts/smoke/label_to_cluster.json` + `artifacts/smoke/cluster_summary.md` (coarse mapping)
+- `artifacts/smoke/models/coarse_model.joblib` (trained coarse classifier)
 - `artifacts/smoke/report_coarse.json` + `artifacts/smoke/top_confusions.csv` (metrics + confusions)
 - `artifacts/smoke/figures/` (PNG plots: UMAP/t-SNE, confusion matrix, QC plots, etc.)
 

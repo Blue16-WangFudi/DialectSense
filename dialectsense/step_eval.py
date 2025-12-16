@@ -30,7 +30,7 @@ def _write_top_confusions(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def run_eval(cfg: dict[str, Any], artifact_dir: Path) -> Path:
-    model_path = artifact_dir / "models" / "coarse_svm.joblib"
+    model_path = artifact_dir / "models" / "coarse_model.joblib"
     bundle = joblib.load(model_path)
     model = bundle["model"]
     label_to_cluster = bundle["label_to_cluster"]
@@ -94,4 +94,3 @@ def run_eval(cfg: dict[str, Any], artifact_dir: Path) -> Path:
     )
     log.info("eval: accuracy=%.4f macro_f1=%.4f", acc, macro_f1)
     return artifact_dir / "report_coarse.json"
-

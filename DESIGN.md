@@ -69,11 +69,13 @@ Outputs:
 
 5) **Coarse-label training + calibration** (`dialectsense.cli train`)
 
-- `StandardScaler` → `LinearSVC(class_weight="balanced")` → calibration on validation split (`CalibratedClassifierCV`).
+- Default (configs): two-stage stacked classifier for better accuracy:
+  - base: `StandardScaler → LinearSVC(class_weight="balanced")` + `StandardScaler → MLPClassifier`
+  - meta: `LogisticRegression` trained on validation outputs (stacking)
 
 Outputs:
 
-- `artifacts/<run_name>/models/coarse_svm.joblib`
+- `artifacts/<run_name>/models/coarse_model.joblib` (and a compatibility copy `coarse_svm.joblib`)
 
 6) **Evaluation** (`dialectsense.cli eval`)
 
