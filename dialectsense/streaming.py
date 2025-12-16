@@ -66,3 +66,10 @@ class AudioStreamChunker:
 
         return out
 
+    @property
+    def buffered_samples(self) -> int:
+        return int(self._buf.size)
+
+    @property
+    def buffered_sec(self) -> float:
+        return float(self.buffered_samples) / float(self.sr) if self.sr else 0.0

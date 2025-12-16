@@ -1,0 +1,12 @@
+2025-12-16 19:04:13,336 INFO HTTP Request: GET https://api.gradio.app/pkg-version "HTTP/1.1 200 OK"
+* Running on local URL:  http://127.0.0.1:7860
+2025-12-16 19:04:14,839 INFO HTTP Request: GET http://127.0.0.1:7860/gradio_api/startup-events "HTTP/1.1 200 OK"
+2025-12-16 19:04:15,135 INFO HTTP Request: HEAD http://127.0.0.1:7860/ "HTTP/1.1 200 OK"
+* To create a public link, set `share=True` in `launch()`.
+Downloading Model from https://www.modelscope.cn to directory: .cache/modelscope/microsoft/wavlm-large
+/mnt/e/OneDrive/文档/大学/课程资料/大三上/数据挖掘/方言识别/DialectSense/.venv/lib/python3.12/site-packages/torch/nn/functional.py:6044: UserWarning: Support for mismatched key_padding_mask and attn_mask is deprecated. Use same type for both instead.
+  warnings.warn(
+/mnt/e/OneDrive/文档/大学/课程资料/大三上/数据挖掘/方言识别/DialectSense/.venv/lib/python3.12/site-packages/torch/nn/functional.py:6044: UserWarning: Support for mismatched key_padding_mask and attn_mask is deprecated. Use same type for both instead.
+  warnings.warn(
+/mnt/e/OneDrive/文档/大学/课程资料/大三上/数据挖掘/方言识别/DialectSense/.venv/lib/python3.12/site-packages/torch/nn/functional.py:6044: UserWarning: Support for mismatched key_padding_mask and attn_mask is deprecated. Use same type for both instead.
+  warnings.warn(
