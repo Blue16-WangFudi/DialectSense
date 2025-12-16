@@ -12,9 +12,15 @@ deps:
 	@$(PY) -m pip install -U pip
 	@$(PY) -m pip install -r requirements.txt
 
+# -------- ffmpeg: 优先使用系统 ffmpeg，仅在缺失时才下载 --------
 ffmpeg:
 	@mkdir -p .cache/ffmpeg
-	@python3 bootstrap_ffmpeg.py
+	@if command -v ffmpeg >/dev/null 2>&1; then \
+		echo "[ffmpeg] system ffmpeg found: $$(command -v ffmpeg)"; \
+	else \
+		echo "[ffmpeg] system ffmpeg not found, bootstrapping..."; \
+		$(PY) bootstrap_ffmpeg.py; \
+	fi
 
 preprocess: deps ffmpeg
 	@mkdir -p "$(TMPDIR)"
