@@ -11,7 +11,8 @@ import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.svm import LinearSVC
+from sklearn.svm import LinearSVC, SVC
+from sklearn.metrics import accuracy_score
 
 from .config import require
 from .embeddings_io import load_embeddings_matrix
@@ -62,6 +63,40 @@ class DecisionLogitCalibrator:
         return self.calibrator.predict_proba(self._scores(X))
 
 
+def _build_estimator(model_cfg: dict[str, Any]) -> Any:
+    kind = str(model_cfg.get("svm_kind", "linear_svc"))
+    class_weight = model_cfg.get("class_weight", None)
+    C = float(model_cfg.get("C", 1.0))
+    max_iter = int(model_cfg.get("max_iter", 8000))
+    if kind == "linear_svc":
+        return LinearSVC(class_weight=class_weight, C=C, max_iter=max_iter, dual="auto")
+    if kind == "svc_rbf":
+        gamma = model_cfg.get("gamma", "scale")
+        return SVC(
+            kernel="rbf",
+            C=C,
+            gamma=gamma,
+            class_weight=class_weight,
+            probability=False,
+            decision_function_shape="ovr",
+        )
+    raise ValueError(f"Unknown svm_kind: {kind}")
+
+
+def _fit_and_score_accuracy(
+    model_cfg: dict[str, Any],
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_val: np.ndarray,
+    y_val: np.ndarray,
+) -> tuple[Pipeline, float]:
+    est = _build_estimator(model_cfg)
+    pipe = Pipeline([("scaler", StandardScaler()), ("svm", est)])
+    pipe.fit(X_train, y_train)
+    y_pred = pipe.predict(X_val)
+    return pipe, float(accuracy_score(y_val, y_pred))
+
+
 def run_train(cfg: dict[str, Any], artifact_dir: Path) -> Path:
     model_cfg = require(cfg, "model")
 
@@ -85,26 +120,61 @@ def run_train(cfg: dict[str, Any], artifact_dir: Path) -> Path:
     X_train = load_embeddings_matrix(artifact_dir, [r.clip_id for r in train])
     X_val = load_embeddings_matrix(artifact_dir, [r.clip_id for r in val])
 
-    pipe = Pipeline(
-        [
-            ("scaler", StandardScaler()),
-            (
-                "svm",
-                LinearSVC(
-                    class_weight=model_cfg.get("class_weight", "balanced"),
-                    C=float(model_cfg.get("C", 1.0)),
-                    max_iter=int(model_cfg.get("max_iter", 8000)),
-                    dual="auto",
-                ),
-            ),
-        ]
-    )
-    pipe.fit(X_train, y_train)
+    tune_cfg = model_cfg.get("tune", {}) if isinstance(model_cfg.get("tune"), dict) else {}
+    tune_enabled = bool(tune_cfg.get("enabled", False))
+
+    chosen_cfg = dict(model_cfg)
+    tune_results: list[dict[str, Any]] = []
+    if tune_enabled:
+        log.info("train: tuning enabled (objective=val_accuracy)")
+        C_grid = tune_cfg.get("C_grid", [0.03, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0])
+        kind_grid = tune_cfg.get("svm_kind_grid", ["linear_svc"])
+        class_weight_grid = tune_cfg.get("class_weight_grid", [None, "balanced"])
+        gamma_grid = tune_cfg.get("gamma_grid", ["scale", "auto"])
+
+        best_acc = -1.0
+        best_pipe: Pipeline | None = None
+        for kind in kind_grid:
+            for cw in class_weight_grid:
+                for C in C_grid:
+                    if str(kind) == "svc_rbf":
+                        for gamma in gamma_grid:
+                            cand = dict(chosen_cfg)
+                            cand.update({"svm_kind": str(kind), "class_weight": cw, "C": float(C), "gamma": gamma})
+                            pipe_c, acc_c = _fit_and_score_accuracy(cand, X_train, y_train, X_val, y_val)
+                            tune_results.append({"svm_kind": str(kind), "class_weight": cw, "C": float(C), "gamma": gamma, "val_accuracy": acc_c})
+                            if acc_c > best_acc:
+                                best_acc, best_pipe, chosen_cfg = acc_c, pipe_c, cand
+                    else:
+                        cand = dict(chosen_cfg)
+                        cand.update({"svm_kind": str(kind), "class_weight": cw, "C": float(C)})
+                        pipe_c, acc_c = _fit_and_score_accuracy(cand, X_train, y_train, X_val, y_val)
+                        tune_results.append({"svm_kind": str(kind), "class_weight": cw, "C": float(C), "val_accuracy": acc_c})
+                        if acc_c > best_acc:
+                            best_acc, best_pipe, chosen_cfg = acc_c, pipe_c, cand
+
+        if best_pipe is None:
+            raise RuntimeError("train: tuning failed to produce any candidate")
+
+        log.info("train: best val_accuracy=%.4f cfg=%s", best_acc, {k: chosen_cfg.get(k) for k in ["svm_kind", "C", "class_weight", "gamma"] if k in chosen_cfg})
+        pipe = best_pipe
+    else:
+        pipe, _ = _fit_and_score_accuracy(chosen_cfg, X_train, y_train, X_val, y_val)
+
+    final_train = str(tune_cfg.get("final_train", "train_only"))
+    if tune_enabled and final_train == "train_val":
+        log.info("train: final_train=train_val (refit on train+val for best accuracy)")
+        X_tv = np.concatenate([X_train, X_val], axis=0)
+        y_tv = np.concatenate([y_train, y_val], axis=0)
+        pipe = Pipeline([("scaler", StandardScaler()), ("svm", _build_estimator(chosen_cfg))])
+        pipe.fit(X_tv, y_tv)
 
     calibrated: Any
     classes_ = np.array(sorted(set(y_train.tolist())), dtype=int)
     cal_cfg = model_cfg.get("calibration", {}) if isinstance(model_cfg.get("calibration"), dict) else {}
     cal_enabled = bool(cal_cfg.get("enabled", True))
+    if tune_enabled and final_train == "train_val":
+        cal_enabled = False
     if cal_enabled and len(set(y_val.tolist())) >= 2:
         present = set(y_val.tolist())
         missing = [int(c) for c in classes_.tolist() if int(c) not in present]
@@ -126,9 +196,18 @@ def run_train(cfg: dict[str, Any], artifact_dir: Path) -> Path:
     joblib.dump(
         {
             "model": calibrated,
-            "model_cfg": model_cfg,
+            "requested_model_cfg": model_cfg,
+            "trained_model_cfg": chosen_cfg,
             "label_to_cluster": label_to_cluster,
             "classes": sorted(set(y_train.tolist())),
+            "tune": {
+                "enabled": tune_enabled,
+                "objective": "val_accuracy",
+                "final_train": final_train,
+                "results": tune_results[: int(tune_cfg.get("max_saved", 2000))],
+            }
+            if tune_enabled
+            else {"enabled": False},
         },
         out_path,
     )

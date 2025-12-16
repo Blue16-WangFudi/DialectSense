@@ -25,6 +25,8 @@ Artifacts are written to `artifacts/<run_name>/` (for smoke: `artifacts/smoke/`)
 make ui CONFIG=configs/smoke.json
 ```
 
+UI 内包含 `Realtime` 页：从麦克风流式截取固定长度 chunk，逐 chunk 输出所有候选粗类（cluster）的置信度折线图，便于实时展示。
+
 ## Dependencies
 
 - Python 3.10+
@@ -47,6 +49,12 @@ You can switch configs via `CONFIG=...`:
 ```bash
 make smoke CONFIG=configs/smoke.json
 make preprocess embed split coarsen train eval report CONFIG=configs/full.json
+```
+
+若目标是尽可能提高 Accuracy，可使用 `configs/full_accuracy.json`（以验证集 Accuracy 为目标做超参搜索并在 train+val 上重训）：
+
+```bash
+make train eval report CONFIG=configs/full_accuracy.json
 ```
 
 If your environment does not have `make` (common on Windows), follow `RUN_WINDOWS.md` and run the Python CLI commands instead.

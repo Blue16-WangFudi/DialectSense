@@ -39,7 +39,8 @@ from ..step_report import run_report
 from ..step_split import run_split
 from ..step_train import run_train
 from ..util import ensure_dir
-from ..wavlm import WavLMEmbedder
+from ..infer import CoarsePredictor
+from ..streaming import AudioStreamChunker
 
 
 log = logging.getLogger("dialectsense")
@@ -228,9 +229,8 @@ def _predict_one(
     ensure_train(ctx.cfg, art)
     ensure_coarsen(ctx.cfg, art)
 
-    model_path = art / "models" / "coarse_svm.joblib"
-    bundle = __import__("joblib").load(model_path)
-    model = bundle["model"]
+    predictor = _get_predictor(config_path)
+    model = predictor.model
 
     cluster_to_labels: dict[str, list[str]] = {}
     c2l_path = art / "cluster_to_labels.json"
@@ -245,25 +245,14 @@ def _predict_one(
     out_wav = tmp_dir / f"input_{uuid.uuid4().hex}.wav"
     preprocess_audio(audio_path, out_wav, audio_cfg=audio_cfg)
 
-    embedder = WavLMEmbedder(embed_cfg)
-    chunks = embedder.embed_wav_path_chunks(out_wav, chunk_cfg=chunk_cfg)
-    emb = embedder.embed_wav_path(out_wav, chunk_cfg=chunk_cfg).embedding
+    chunks = predictor.embedder.embed_wav_path_chunks(out_wav, chunk_cfg=chunk_cfg)
+    emb = predictor.embedder.embed_wav_path(out_wav, chunk_cfg=chunk_cfg).embedding
 
     proba = model.predict_proba(emb.reshape(1, -1))[0].astype(np.float64)
-    # Try to recover class order.
-    classes = None
-    if hasattr(model, "classes_"):
-        try:
-            classes = np.asarray(getattr(model, "classes_"), dtype=int)
-        except Exception:
-            classes = None
-    if classes is None and hasattr(model, "calibrator"):
-        try:
-            classes = np.asarray(model.calibrator.classes_, dtype=int)
-        except Exception:
-            classes = None
+    classes = getattr(model, "classes_", None)
     if classes is None:
         classes = np.arange(len(proba), dtype=int)
+    classes = np.asarray(classes, dtype=int)
 
     idx = np.argsort(-proba)[: int(top_k)]
     rows: list[list[Any]] = []
@@ -304,6 +293,183 @@ def _predict_one(
     return md, rows, timeline_img
 
 
+_PREDICTOR_CACHE: dict[str, tuple[float, CoarsePredictor]] = {}
+
+
+def _get_predictor(config_path: str) -> CoarsePredictor:
+    cfg_path = str(Path(config_path))
+    ctx = _load_ctx(cfg_path)
+    model_path = ctx.artifact_dir / "models" / "coarse_svm.joblib"
+    mtime = float(model_path.stat().st_mtime) if model_path.exists() else 0.0
+    cached = _PREDICTOR_CACHE.get(cfg_path)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+    pred = CoarsePredictor.from_artifacts(ctx.artifact_dir, cfg=ctx.cfg)
+    _PREDICTOR_CACHE[cfg_path] = (mtime, pred)
+    return pred
+
+
+@dataclass
+class RealtimeState:
+    last_input_len: int | None = None
+    chunker: AudioStreamChunker | None = None
+    times: list[float] = None  # type: ignore[assignment]
+    probas: list[list[float]] = None  # type: ignore[assignment]
+    classes: list[int] = None  # type: ignore[assignment]
+    ema: list[float] | None = None
+
+    def __post_init__(self) -> None:
+        if self.times is None:
+            self.times = []
+        if self.probas is None:
+            self.probas = []
+        if self.classes is None:
+            self.classes = []
+
+
+def _format_topk_clusters(
+    cluster_to_labels: dict[str, list[str]], classes: np.ndarray, proba: np.ndarray, k: int
+) -> list[list[Any]]:
+    k = int(max(1, k))
+    idx = np.argsort(-proba)[:k]
+    rows: list[list[Any]] = []
+    for rank, j in enumerate(idx.tolist(), start=1):
+        cid = int(classes[j])
+        detail = cluster_to_labels.get(str(cid), [])
+        rows.append([rank, str(cid), float(proba[j]), "、".join(detail[:6]) + ("…" if len(detail) > 6 else "")])
+    return rows
+
+
+def _render_proba_lines(times: list[float], probas: list[list[float]], classes: list[int]) -> np.ndarray:
+    fig, ax = plt.subplots(figsize=(8.2, 3.1))
+    ax.set_ylim(0.0, 1.0)
+    ax.set_xlabel("time (s)")
+    ax.set_ylabel("confidence")
+    ax.set_title("Per-label confidence over time (fixed chunks)")
+    ax.grid(True, alpha=0.3)
+
+    if times and probas and classes:
+        t = np.asarray(times, dtype=np.float64)
+        P = np.asarray(probas, dtype=np.float64)  # [T, C]
+        cmap = plt.get_cmap("tab20")
+        for j, cid in enumerate(classes):
+            ax.plot(t, P[:, j], linewidth=1.8, alpha=0.9, color=cmap(j % 20), label=str(cid))
+        ax.legend(ncol=6, fontsize=8, frameon=False, loc="upper center", bbox_to_anchor=(0.5, -0.18))
+
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=160)
+    plt.close(fig)
+    buf.seek(0)
+    return plt.imread(buf)
+
+
+def _rt_reset(cfg_path: str, chunk_sec: float, hop_sec: float) -> tuple[RealtimeState, str, list[list[Any]], np.ndarray]:
+    pred = _get_predictor(cfg_path)
+    state = RealtimeState()
+    state.chunker = AudioStreamChunker(sr=int(pred.target_sr), chunk_sec=float(chunk_sec), hop_sec=float(hop_sec))
+    state.classes = [int(c) for c in pred.classes.tolist()]
+    state.times = []
+    state.probas = []
+    state.ema = None
+    status = "Ready. Start speaking; the chart updates after each fixed-length chunk."
+    table = [[1, "-", 0.0, "-"]]
+    img = _render_proba_lines([], [], state.classes)
+    return state, status, table, img
+
+
+def _rt_step(
+    audio: Any,
+    cfg_path: str,
+    state: RealtimeState,
+    chunk_sec: float,
+    hop_sec: float,
+    top_k: int,
+    max_points: int,
+    ema_alpha: float,
+) -> tuple[RealtimeState, str, list[list[Any]], np.ndarray]:
+    if state is None:
+        state = RealtimeState()
+
+    pred = _get_predictor(cfg_path)
+    if state.chunker is None or abs(float(state.chunker.chunk_sec) - float(chunk_sec)) > 1e-6 or abs(
+        float(state.chunker.hop_sec) - float(hop_sec)
+    ) > 1e-6:
+        state.chunker = AudioStreamChunker(sr=int(pred.target_sr), chunk_sec=float(chunk_sec), hop_sec=float(hop_sec))
+        state.last_input_len = None
+        state.times = []
+        state.probas = []
+        state.ema = None
+
+    if audio is None:
+        img = _render_proba_lines(state.times, state.probas, state.classes)
+        return state, "Waiting for audio…", [[1, "-", 0.0, "-"]], img
+
+    sr_in, y_in = audio
+    y_in = np.asarray(y_in)
+    if y_in.size == 0:
+        img = _render_proba_lines(state.times, state.probas, state.classes)
+        return state, "Waiting for audio…", [[1, "-", 0.0, "-"]], img
+
+    # Gradio streaming may provide cumulative audio or per-chunk audio; handle both.
+    y_mono = y_in.mean(axis=1) if y_in.ndim == 2 else y_in
+    y_mono = np.asarray(y_mono, dtype=np.float32).reshape(-1)
+    if state.last_input_len is None:
+        y_delta = y_mono
+    else:
+        if y_mono.size > state.last_input_len:
+            y_delta = y_mono[state.last_input_len :]
+        else:
+            y_delta = y_mono
+    state.last_input_len = int(y_mono.size)
+
+    if y_delta.size == 0:
+        img = _render_proba_lines(state.times, state.probas, state.classes)
+        return state, "Listening…", [[1, "-", 0.0, "-"]], img
+
+    updates = pred.stream_predict(state.chunker, y_new=y_delta, sr=int(sr_in))
+    if not updates:
+        img = _render_proba_lines(state.times, state.probas, state.classes)
+        return state, "Listening… (buffering until next chunk)", [[1, "-", 0.0, "-"]], img
+
+    max_points = int(max(1, max_points))
+    alpha = float(np.clip(float(ema_alpha), 0.0, 1.0))
+
+    last_classes = None
+    last_proba = None
+    last_t = None
+    for t_end, classes, proba in updates:
+        last_t = float(t_end)
+        last_classes = classes
+        last_proba = proba.astype(np.float64, copy=False)
+        if state.ema is None or len(state.ema) != int(last_proba.size):
+            state.ema = last_proba.tolist()
+        else:
+            ema = np.asarray(state.ema, dtype=np.float64)
+            ema = (1.0 - alpha) * ema + alpha * last_proba
+            state.ema = ema.tolist()
+
+        state.times.append(last_t)
+        state.probas.append(state.ema)
+
+    if len(state.times) > max_points:
+        state.times = state.times[-max_points:]
+        state.probas = state.probas[-max_points:]
+
+    classes_list = [int(c) for c in (last_classes.tolist() if last_classes is not None else pred.classes.tolist())]
+    state.classes = classes_list
+
+    proba_now = np.asarray(state.probas[-1], dtype=np.float64)
+    classes_now = np.asarray(state.classes, dtype=int)
+    top_rows = _format_topk_clusters(pred.cluster_to_labels, classes_now, proba_now, int(top_k))
+
+    best = int(classes_now[int(np.argmax(proba_now))])
+    best_detail = pred.cluster_to_labels.get(str(best), [])
+    status = f"Top1: `{best}` (conf={float(np.max(proba_now)):.3f}) · {('、'.join(best_detail[:6]) + ('…' if len(best_detail)>6 else '')) if best_detail else ''}"
+    img = _render_proba_lines(state.times, state.probas, state.classes)
+    return state, status, top_rows, img
+
+
 def launch(default_config_path: str = "configs/smoke.json") -> None:
     _ensure_local_ffmpeg_on_path()
     import gradio as gr
@@ -311,7 +477,7 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
 
     repo = _repo_root()
     config_choices = []
-    for p in [repo / "configs" / "smoke.json", repo / "configs" / "full.json"]:
+    for p in [repo / "configs" / "smoke.json", repo / "configs" / "full.json", repo / "configs" / "full_accuracy.json"]:
         if p.exists():
             config_choices.append(str(p))
     if str(Path(default_config_path)) not in config_choices and Path(default_config_path).exists():
@@ -379,6 +545,25 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
                 pred_table = gr.Dataframe(headers=["rank", "cluster_id", "prob"], interactive=False)
                 pred_timeline = gr.Image(label="Timeline", type="numpy")
 
+            with gr.Tab("Realtime"):
+                gr.Markdown(
+                    "Realtime fixed-chunk inference from microphone streaming. "
+                    "Shows per-cluster confidence over time (line chart)."
+                )
+                rt_state = gr.State(RealtimeState())
+                with gr.Row():
+                    rt_chunk = gr.Slider(0.8, 6.0, value=3.0, step=0.1, label="Chunk length (sec)")
+                    rt_hop = gr.Slider(0.2, 3.0, value=1.0, step=0.1, label="Hop (sec)")
+                    rt_points = gr.Slider(10, 240, value=60, step=5, label="History points")
+                with gr.Row():
+                    rt_topk = gr.Slider(1, 12, value=5, step=1, label="Top-K table")
+                    rt_ema = gr.Slider(0.0, 1.0, value=0.35, step=0.05, label="EMA smoothing α (0=off)")
+                    rt_reset_btn = gr.Button("Reset", variant="secondary")
+                rt_audio = gr.Audio(sources=["microphone"], type="numpy", streaming=True, label="Microphone (streaming)")
+                rt_status = gr.Markdown()
+                rt_table = gr.Dataframe(headers=["rank", "cluster_id", "conf", "cluster_labels"], interactive=False)
+                rt_chart = gr.Image(label="Confidence lines", type="numpy")
+
         def _do_reload(cfg_path: str):
             return _load_results(cfg_path)
 
@@ -425,9 +610,19 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
 
         pred_btn.click(fn=_predict_one, inputs=[config_path, audio_in, topk, show_timeline], outputs=[pred_md, pred_table, pred_timeline])
 
+        rt_reset_btn.click(fn=_rt_reset, inputs=[config_path, rt_chunk, rt_hop], outputs=[rt_state, rt_status, rt_table, rt_chart])
+        rt_audio.stream(
+            fn=_rt_step,
+            inputs=[rt_audio, config_path, rt_state, rt_chunk, rt_hop, rt_topk, rt_points, rt_ema],
+            outputs=[rt_state, rt_status, rt_table, rt_chart],
+            stream_every=0.8,
+            trigger_mode="always_last",
+        )
+
         demo.load(fn=_do_reload, inputs=[config_path], outputs=[overview, metrics, cluster_md, conf_pair, figs, warn])
         demo.load(fn=_set_conf_table, inputs=[conf_pair], outputs=[conf_table])
         demo.load(fn=_do_qc, inputs=[config_path, qc_limit, kept_only], outputs=[qc_table])
+        demo.load(fn=_rt_reset, inputs=[config_path, rt_chunk, rt_hop], outputs=[rt_state, rt_status, rt_table, rt_chart])
 
     queue_sig = inspect.signature(demo.queue)
     if "concurrency_count" in queue_sig.parameters:

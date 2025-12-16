@@ -1,0 +1,104 @@
+{
+  "run_name": "full",
+  "seed": 42,
+  "data": {
+    "metadata_csv": "datasets/metadata.csv",
+    "audio_dir": "datasets/oggs",
+    "id_col": "id",
+    "label_col": "dialect.province",
+    "uploader_col": "uploader_id",
+    "min_votes": null,
+    "top_k_labels": null,
+    "max_per_label": null,
+    "max_total": null
+  },
+  "audio": {
+    "target_sr": 16000,
+    "min_sec": 1.0,
+    "trim_silence": {
+      "enabled": true,
+      "threshold_db": -40.0,
+      "min_silence_sec": 0.2
+    },
+    "normalize": {
+      "enabled": true,
+      "target_rms_dbfs": -20.0,
+      "max_gain_db": 20.0,
+      "peak_limit": 0.99
+    }
+  },
+  "embed": {
+    "backend": "wavlm_large",
+    "model_id": "microsoft/wavlm-large",
+    "model_cache_dir": ".cache/modelscope",
+    "device": "auto",
+    "layer_start": 6,
+    "layer_end": 12,
+    "chunk": {
+      "max_sec": 12.0,
+      "strategy": "chunk",
+      "chunk_sec": 3.0,
+      "hop_sec": 1.5,
+      "agg": "mean",
+      "max_chunks": 40
+    }
+  },
+  "split": {
+    "train_ratio": 0.8,
+    "val_ratio": 0.1,
+    "test_ratio": 0.1,
+    "max_tries": 250,
+    "min_groups_per_label": 3,
+    "max_label_drop_iterations": 500,
+    "min_per_label_train": 20,
+    "min_per_label_val": 5,
+    "min_per_label_test": 20
+  },
+  "coarse": {
+    "enabled": true,
+    "k": 12,
+    "centroid": {
+      "method": "mean",
+      "trim_fraction": 0.1
+    },
+    "kmeans": {
+      "n_init": 30
+    }
+  },
+  "model": {
+    "svm_kind": "linear_svc",
+    "class_weight": null,
+    "C": 1.0,
+    "max_iter": 8000,
+    "calibration": {
+      "enabled": false,
+      "method": "sigmoid"
+    },
+    "tune": {
+      "enabled": true,
+      "objective": "val_accuracy",
+      "final_train": "train_val",
+      "svm_kind_grid": [
+        "linear_svc"
+      ],
+      "C_grid": [
+        0.1,
+        0.3,
+        1.0,
+        3.0
+      ],
+      "class_weight_grid": [
+        null
+      ],
+      "max_saved": 300
+    }
+  },
+  "report": {
+    "max_labels_bar": 50,
+    "embedding_2d": {
+      "method": "umap_if_available_else_tsne",
+      "max_points": 20000,
+      "perplexity": 30
+    }
+  }
+}

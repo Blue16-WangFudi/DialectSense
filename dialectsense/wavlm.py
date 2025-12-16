@@ -93,6 +93,10 @@ class WavLMEmbedder:
             return int(self.model.config.hidden_size)
         except Exception:
             return 1024
+
+    @property
+    def sample_rate(self) -> int:
+        return 16000
     
     def _embed_chunk(self, chunk: np.ndarray, sr: int) -> np.ndarray:
         torch = self._torch
@@ -115,6 +119,14 @@ class WavLMEmbedder:
         x = torch.stack(layers, dim=0).mean(dim=0)  # [1, T, D]
         emb = x.mean(dim=1).squeeze(0)  # [D]
         return _l2_normalize(emb.detach().to("cpu").float().numpy())
+
+    def embed_audio(self, y: np.ndarray, sr: int) -> np.ndarray:
+        y = np.asarray(y, dtype=np.float32).reshape(-1)
+        if y.size == 0:
+            return np.zeros((self.dim,), dtype=np.float32)
+        torch = self._torch
+        with torch.inference_mode():
+            return self._embed_chunk(y, sr=int(sr))
 
     def embed_wav_path_chunks(self, wav_path: str | Path, chunk_cfg: dict[str, Any]) -> list[ChunkEmbedding]:
         wav_path = Path(wav_path)
