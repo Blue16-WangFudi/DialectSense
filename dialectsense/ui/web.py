@@ -839,6 +839,15 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
     # Avoid slow/blocked network calls to Gradio's analytics/version check in restricted environments.
     os.environ.setdefault("GRADIO_ANALYTICS_ENABLED", "False")
 
+    no_proxy = os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or ""
+    tokens = [t.strip() for t in no_proxy.split(",") if t.strip()]
+    for host in ["127.0.0.1", "localhost"]:
+        if host not in tokens:
+            tokens.append(host)
+    no_proxy = ",".join(tokens)
+    os.environ["NO_PROXY"] = no_proxy
+    os.environ["no_proxy"] = no_proxy
+
     config_choices = []
     for p in [repo / "configs" / "smoke.json", repo / "configs" / "full.json"]:
         if p.exists():
@@ -918,8 +927,8 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
                 rt_state = gr.State(RealtimeState())
                 rt_sid = gr.State("")
                 with gr.Row():
-                    rt_chunk = gr.Slider(0.6, 6.0, value=1.5, step=0.1, label="Chunk length (sec)")
-                    rt_hop = gr.Slider(0.2, 3.0, value=0.75, step=0.05, label="Hop (sec)")
+                    rt_chunk = gr.Slider(0.1, 6.0, value=0.1, step=0.05, label="Chunk length (sec)")
+                    rt_hop = gr.Slider(0.05, 3.0, value=0.1, step=0.05, label="Hop (sec)")
                     rt_points = gr.Slider(10, 240, value=60, step=5, label="History points")
                 with gr.Row():
                     rt_topk = gr.Slider(1, 12, value=5, step=1, label="Top-K table")
