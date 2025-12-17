@@ -152,6 +152,15 @@ def _df_value(headers: list[str], rows: list[list[Any]]) -> dict[str, Any]:
     return {"headers": list(headers), "data": [[_cell(v) for v in r] for r in rows]}
 
 
+def _df_update(headers: list[str], rows: list[list[Any]]) -> Any:
+    try:
+        import gradio as gr
+
+        return gr.update(headers=list(headers), value=rows)
+    except Exception:
+        return _df_value(headers, rows)
+
+
 @dataclass(frozen=True)
 class RunContext:
     config_path: str
@@ -554,7 +563,7 @@ def _rt_reset(
     hop_sec: float,
     session_id: str | None = None,
     request: Any = None,
-) -> tuple[RealtimeState, str, list[list[Any]], np.ndarray]:
+) -> tuple[RealtimeState, str, Any, np.ndarray]:
     pred = _get_predictor(cfg_path)
     if not session_id:
         try:
@@ -570,7 +579,7 @@ def _rt_reset(
     state.pending = []
     state.last_input_len = None
     status = "Ready. Start speaking; the chart updates after each fixed-length chunk."
-    table: list[list[Any]] = [[1, "-", 0.0, "-"]]
+    table = _df_update(["rank", "cluster_id", "conf", "cluster_labels"], [[1, "-", 0.0, "-"]])
     legend = {int(cid): _cluster_legend(pred.cluster_to_labels, int(cid)) for cid in state.classes}
     img = _render_proba_lines([], [], state.classes, plot_class_ids=None, legend_map=legend, max_lines=6)
     _rt_put_state(state)
@@ -635,11 +644,13 @@ def _rt_step_safe(
         legend = {int(cid): _cluster_legend(pred.cluster_to_labels, int(cid)) for cid in (st.classes or [])}
         plot_k = int(max(1, top_k))
         plot_ids: list[int] | None = None
+        table_rows: list[list[Any]] = [[1, "-", 0.0, "-"]]
         if st.probas and st.classes and len(st.probas[-1]) == len(st.classes):
             p_last = np.asarray(st.probas[-1], dtype=np.float64)
             c_last = np.asarray(st.classes, dtype=int)
             idx_last = np.argsort(-p_last)[:plot_k]
             plot_ids = [int(c_last[i]) for i in idx_last.tolist()]
+            table_rows = _format_topk_clusters(pred.cluster_to_labels, c_last, p_last, int(top_k))
 
         if audio is None:
             img = _render_proba_lines(
@@ -652,7 +663,7 @@ def _rt_step_safe(
                     f"buffered={float(st.chunker.buffered_sec) if st.chunker else 0.0:.2f}s"
                 )
             _rt_put_state(st)
-            yield st, status, [[1, "-", 0.0, "-"]], img
+            yield st, status, _df_update(["rank", "cluster_id", "conf", "cluster_labels"], table_rows), img
             return
 
         sr_in, y_in = audio
@@ -665,7 +676,7 @@ def _rt_step_safe(
             if debug:
                 status += f"\n\n`debug`: session={st.session_id} sr={sr_in} y.size=0 pending={len(st.pending)}"
             _rt_put_state(st)
-            yield st, status, [[1, "-", 0.0, "-"]], img
+            yield st, status, _df_update(["rank", "cluster_id", "conf", "cluster_labels"], table_rows), img
             return
 
         # Gradio streaming may provide cumulative audio (growing) or per-chunk audio (fixed size).
@@ -724,7 +735,7 @@ def _rt_step_safe(
                     f"pending={len(st.pending)} buffered={float(st.chunker.buffered_sec) if st.chunker else 0.0:.2f}s"
                 )
             _rt_put_state(st)
-            yield st, status, [[1, "-", 0.0, "-"]], img
+            yield st, status, _df_update(["rank", "cluster_id", "conf", "cluster_labels"], table_rows), img
             return
 
         # Push audio into chunker (after resampling to target sr). Inference can be slow; we surface a quick
@@ -748,7 +759,7 @@ def _rt_step_safe(
                     f"delta@16k={int(y_delta_16k.size)} pending={len(st.pending)}"
                 )
             _rt_put_state(st)
-            yield st, status, [[1, "-", 0.0, "-"]], img
+            yield st, status, _df_update(["rank", "cluster_id", "conf", "cluster_labels"], table_rows), img
             return
 
         # Yield quick progress update before heavy inference.
@@ -764,7 +775,7 @@ def _rt_step_safe(
             st.times, st.probas, st.classes, plot_class_ids=plot_ids, legend_map=legend, max_lines=plot_k
         )
         _rt_put_state(st)
-        yield st, status, [[1, "-", 0.0, "-"]], img
+        yield st, status, _df_update(["rank", "cluster_id", "conf", "cluster_labels"], table_rows), img
 
         # Do inference for one chunk and yield final update.
         max_points = int(max(1, max_points))
@@ -814,13 +825,13 @@ def _rt_step_safe(
             st.times, st.probas, st.classes, plot_class_ids=plot_ids, legend_map=legend, max_lines=plot_k
         )
         _rt_put_state(st)
-        yield st, status, top_rows, img
+        yield st, status, _df_update(["rank", "cluster_id", "conf", "cluster_labels"], top_rows), img
     except Exception:
         st = state if state is not None else RealtimeState()
         status = "```text\n" + traceback.format_exc() + "\n```"
         img = _render_proba_lines(st.times, st.probas, st.classes, plot_class_ids=None, legend_map=None, max_lines=6)
         _rt_put_state(st)
-        yield st, status, [], img
+        yield st, status, _df_update(["rank", "cluster_id", "conf", "cluster_labels"], []), img
 
 
 def launch(default_config_path: str = "configs/smoke.json") -> None:
