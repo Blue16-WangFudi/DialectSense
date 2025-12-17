@@ -420,7 +420,7 @@ def _rt_prune_cache(now: float, max_age_sec: float = 1800.0) -> None:
 def _rt_get_state(session_id: str | None, provided: RealtimeState | None) -> RealtimeState:
     """
     Some Gradio/proxy deployments don't reliably persist `gr.State` updates for `.stream()` events.
-    To make buffering robust, we also keep a server-side per-session cache keyed by `request.session_hash`.
+    To make buffering robust, we also keep a server-side per-session cache keyed by a stable session id.
     """
     now = time.time()
     _rt_prune_cache(now)
@@ -548,14 +548,18 @@ def _render_proba_lines(
 
 
 def _rt_reset(
-    cfg_path: str, chunk_sec: float, hop_sec: float, request: Any = None
+    cfg_path: str,
+    chunk_sec: float,
+    hop_sec: float,
+    session_id: str | None = None,
+    request: Any = None,
 ) -> tuple[RealtimeState, str, dict[str, Any], np.ndarray]:
     pred = _get_predictor(cfg_path)
-    session_id = None
-    try:
-        session_id = getattr(request, "session_hash", None)
-    except Exception:
-        session_id = None
+    if not session_id:
+        try:
+            session_id = getattr(request, "session_hash", None)
+        except Exception:
+            session_id = None
     state = _rt_get_state(session_id, None)
     state.chunker = AudioStreamChunker(sr=int(pred.target_sr), chunk_sec=float(chunk_sec), hop_sec=float(hop_sec))
     state.classes = [int(c) for c in pred.classes.tolist()]
@@ -595,15 +599,16 @@ def _rt_step_safe(
     top_k: int,
     max_points: int,
     ema_alpha: float,
+    session_id: str | None = None,
     debug: bool = False,
     request: Any = None,
 ):
     try:
-        session_id = None
-        try:
-            session_id = getattr(request, "session_hash", None)
-        except Exception:
-            session_id = None
+        if not session_id:
+            try:
+                session_id = getattr(request, "session_hash", None)
+            except Exception:
+                session_id = None
         st = _rt_get_state(session_id, state if isinstance(state, RealtimeState) else None)
         pred = _get_predictor(cfg_path)
 
@@ -669,6 +674,21 @@ def _rt_step_safe(
             else:
                 sample_axis = 0
                 n_samples = int(y_arr.shape[0])
+
+        # New recording / stream restart: Gradio may reset the cumulative buffer length.
+        # If we don't reset our own buffered state, we'll keep "buffering" forever.
+        if st.last_input_len is not None:
+            last_n = int(st.last_input_len)
+            # Only treat as restart when the previous buffer was "meaningfully large"
+            # to avoid false positives from small chunk-size jitter.
+            if last_n >= 4096 and n_samples + 256 < last_n and n_samples < int(0.75 * last_n):
+                st.last_input_len = None
+                if st.chunker is not None:
+                    st.chunker.reset()
+                st.times = []
+                st.probas = []
+                st.ema = None
+                st.pending = []
 
         if st.last_input_len is None:
             y_delta_raw = y_arr
@@ -888,6 +908,7 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
                     "Tip: first run may need to download/load WavLM; click Warmup and wait."
                 )
                 rt_state = gr.State(RealtimeState())
+                rt_sid = gr.State("")
                 with gr.Row():
                     rt_chunk = gr.Slider(0.6, 6.0, value=1.5, step=0.1, label="Chunk length (sec)")
                     rt_hop = gr.Slider(0.2, 3.0, value=0.75, step=0.05, label="Hop (sec)")
@@ -956,8 +977,26 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
             except Exception:
                 return "```text\n" + traceback.format_exc() + "\n```"
 
-        def _rt_reset_wrapped(cfg_path: str, chunk_sec: float, hop_sec: float, request: GradioRequest):
-            return _rt_reset(cfg_path, chunk_sec, hop_sec, request=request)
+        def _stable_sid(sid: str | None, request: Any) -> str:
+            if sid:
+                return str(sid)
+            try:
+                s = getattr(request, "session_hash", None)
+                if s:
+                    return str(s)
+            except Exception:
+                pass
+            return str(uuid.uuid4())
+
+        def _rt_init_wrapped(cfg_path: str, chunk_sec: float, hop_sec: float, request: GradioRequest):
+            sid = _stable_sid(None, request)
+            state, status, table, img = _rt_reset(cfg_path, chunk_sec, hop_sec, session_id=sid, request=request)
+            return sid, state, status, table, img
+
+        def _rt_reset_wrapped(cfg_path: str, chunk_sec: float, hop_sec: float, sid: str, request: GradioRequest):
+            sid = _stable_sid(sid, request)
+            state, status, table, img = _rt_reset(cfg_path, chunk_sec, hop_sec, session_id=sid, request=request)
+            return sid, state, status, table, img
 
         def _rt_step_wrapped(
             audio: Any,
@@ -968,10 +1007,12 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
             top_k: int,
             max_points: int,
             ema_alpha: float,
+            sid: str,
             debug: bool,
             request: GradioRequest,
         ):
-            yield from _rt_step_safe(
+            sid = _stable_sid(sid, request)
+            for st, status, table, img in _rt_step_safe(
                 audio,
                 cfg_path,
                 state,
@@ -980,9 +1021,11 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
                 top_k,
                 max_points,
                 ema_alpha,
-                debug,
+                session_id=sid,
+                debug=debug,
                 request=request,
-            )
+            ):
+                yield sid, st, status, table, img
 
         pred_btn.click(
             fn=_predict_one_safe,
@@ -993,22 +1036,28 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
         warmup_btn.click(fn=_warmup, inputs=[config_path], outputs=[pred_md], time_limit=1800)
 
         rt_reset_btn.click(
-            fn=_rt_reset_wrapped, inputs=[config_path, rt_chunk, rt_hop], outputs=[rt_state, rt_status, rt_table, rt_chart]
+            fn=_rt_reset_wrapped,
+            inputs=[config_path, rt_chunk, rt_hop, rt_sid],
+            outputs=[rt_sid, rt_state, rt_status, rt_table, rt_chart],
         )
         rt_warmup_btn.click(fn=_warmup, inputs=[config_path], outputs=[rt_status], time_limit=1800)
         rt_audio.stream(
             fn=_rt_step_wrapped,
-            inputs=[rt_audio, config_path, rt_state, rt_chunk, rt_hop, rt_topk, rt_points, rt_ema, rt_debug],
-            outputs=[rt_state, rt_status, rt_table, rt_chart],
-            stream_every=0.8,
-            trigger_mode="always_last",
+            inputs=[rt_audio, config_path, rt_state, rt_chunk, rt_hop, rt_topk, rt_points, rt_ema, rt_sid, rt_debug],
+            outputs=[rt_sid, rt_state, rt_status, rt_table, rt_chart],
+            stream_every=0.25,
+            trigger_mode="multiple",
             time_limit=1800,
         )
 
         demo.load(fn=_do_reload, inputs=[config_path], outputs=[overview, metrics, cluster_md, conf_pair, figs, warn])
         demo.load(fn=_set_conf_table, inputs=[conf_pair], outputs=[conf_table])
         demo.load(fn=_do_qc, inputs=[config_path, qc_limit, kept_only], outputs=[qc_table])
-        demo.load(fn=_rt_reset_wrapped, inputs=[config_path, rt_chunk, rt_hop], outputs=[rt_state, rt_status, rt_table, rt_chart])
+        demo.load(
+            fn=_rt_init_wrapped,
+            inputs=[config_path, rt_chunk, rt_hop],
+            outputs=[rt_sid, rt_state, rt_status, rt_table, rt_chart],
+        )
 
     queue_sig = inspect.signature(demo.queue)
     if "concurrency_count" in queue_sig.parameters:
