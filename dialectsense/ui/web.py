@@ -612,11 +612,13 @@ def _rt_step_safe(
         st = _rt_get_state(session_id, state if isinstance(state, RealtimeState) else None)
         pred = _get_predictor(cfg_path)
 
-        # (Re)initialize chunker if params changed
-        # Be tolerant to minor float jitter from UI sliders (can otherwise reset buffering).
-        if st.chunker is None or abs(float(st.chunker.chunk_sec) - float(chunk_sec)) > 1e-3 or abs(
-            float(st.chunker.hop_sec) - float(hop_sec)
-        ) > 1e-3:
+        # (Re)initialize chunker if params changed.
+        # Be tolerant to float jitter from UI sliders (otherwise buffering can keep resetting).
+        chunk_sec_r = round(float(chunk_sec), 3)
+        hop_sec_r = round(float(hop_sec), 3)
+        if st.chunker is None or abs(round(float(st.chunker.chunk_sec), 3) - chunk_sec_r) > 5e-3 or abs(
+            round(float(st.chunker.hop_sec), 3) - hop_sec_r
+        ) > 5e-3:
             st.chunker = AudioStreamChunker(sr=int(pred.target_sr), chunk_sec=float(chunk_sec), hop_sec=float(hop_sec))
             st.last_input_len = None
             st.times = []
@@ -1045,7 +1047,7 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
             fn=_rt_step_wrapped,
             inputs=[rt_audio, config_path, rt_state, rt_chunk, rt_hop, rt_topk, rt_points, rt_ema, rt_sid, rt_debug],
             outputs=[rt_sid, rt_state, rt_status, rt_table, rt_chart],
-            stream_every=0.8,
+            stream_every=0.1,
             trigger_mode="once",
             time_limit=1800,
         )
