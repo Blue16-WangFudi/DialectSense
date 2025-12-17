@@ -1045,8 +1045,8 @@ def launch(default_config_path: str = "configs/smoke.json") -> None:
             fn=_rt_step_wrapped,
             inputs=[rt_audio, config_path, rt_state, rt_chunk, rt_hop, rt_topk, rt_points, rt_ema, rt_sid, rt_debug],
             outputs=[rt_sid, rt_state, rt_status, rt_table, rt_chart],
-            stream_every=0.25,
-            trigger_mode="multiple",
+            stream_every=0.8,
+            trigger_mode="once",
             time_limit=1800,
         )
 
