@@ -390,6 +390,7 @@ def _get_predictor(config_path: str) -> CoarsePredictor:
 @dataclass
 class RealtimeState:
     last_input_len: int | None = None
+    last_call_ts: float | None = None
     chunker: AudioStreamChunker | None = None
     times: list[float] = None  # type: ignore[assignment]
     probas: list[list[float]] = None  # type: ignore[assignment]
@@ -610,6 +611,10 @@ def _rt_step_safe(
             except Exception:
                 session_id = None
         st = _rt_get_state(session_id, state if isinstance(state, RealtimeState) else None)
+        now = time.time()
+        prev_ts = st.last_call_ts
+        st.last_call_ts = float(now)
+        gap_sec = None if prev_ts is None else (float(now) - float(prev_ts))
         pred = _get_predictor(cfg_path)
 
         # (Re)initialize chunker if params changed.
@@ -685,12 +690,13 @@ def _rt_step_safe(
             # to avoid false positives from small chunk-size jitter.
             if last_n >= 4096 and n_samples + 256 < last_n and n_samples < int(0.75 * last_n):
                 st.last_input_len = None
-                if st.chunker is not None:
-                    st.chunker.reset()
-                st.times = []
-                st.probas = []
-                st.ema = None
-                st.pending = []
+                if gap_sec is None or float(gap_sec) > 1.2:
+                    if st.chunker is not None:
+                        st.chunker.reset()
+                    st.times = []
+                    st.probas = []
+                    st.ema = None
+                    st.pending = []
 
         if st.last_input_len is None:
             y_delta_raw = y_arr
