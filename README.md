@@ -83,5 +83,3 @@ Each stage is runnable independently (and reuses cached artifacts when present):
 .venv/bin/python -m dialectsense.cli report     --config configs/smoke.json
 .venv/bin/python -m dialectsense.cli ui         --config configs/smoke.json
 ```
-
-See `DESIGN.md` for the pipeline rationale and configuration keys.
