@@ -50,7 +50,7 @@ make smoke CONFIG=configs/smoke.json
 make preprocess embed split coarsen train eval report CONFIG=configs/full.json
 ```
 
-`configs/full.json` 默认使用 stacked coarse classifier（SVM+MLP→meta LR），用于提高 Accuracy；如只想重训模型与评测：
+configs/full.json by default uses a stacked coarse classifier (SVM + MLP → meta LR) to improve Accuracy. If you only want to retrain the model and evaluate:
 
 ```bash
 make train eval report CONFIG=configs/full.json
