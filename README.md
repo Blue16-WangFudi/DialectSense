@@ -24,8 +24,7 @@ Artifacts are written to `artifacts/<run_name>/` (for smoke: `artifacts/smoke/`)
 ```bash
 make ui CONFIG=configs/smoke.json
 ```
-
-UI 内包含 `Realtime` 页：从麦克风流式截取固定长度 chunk，逐 chunk 输出所有候选粗类（cluster）的置信度折线图，便于实时展示。
+The UI includes a Realtime page: streaming capture of fixed-length chunks from the microphone, progressively outputting confidence line charts for all candidate clusters, facilitating real-time visualization.
 
 ## Dependencies
 
@@ -86,13 +85,3 @@ Each stage is runnable independently (and reuses cached artifacts when present):
 ```
 
 See `DESIGN.md` for the pipeline rationale and configuration keys.
-
-## Paper (LaTeX)
-
-To compile `latex/openwork.tex`, run:
-
-```powershell
-.\build-openwork.ps1
-```
-
-The PDF will be written to `latex/build/openwork.pdf`.
